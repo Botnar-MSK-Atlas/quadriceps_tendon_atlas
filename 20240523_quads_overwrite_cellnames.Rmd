@@ -1,0 +1,492 @@
+---
+title: "Overwrite_cellnames"
+author: "Jolet Mimpen"
+date: "2024-03-06"
+output: html_document
+---
+
+#Open fibroblast subcluster object
+```{r}
+quads.stromalonly <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20240118_quads_stromalonly.RDS")
+
+DimPlot(quads_fibroblasts)
+
+levels(quads_fibroblasts@active.ident)
+
+quads_data_copy <- quads_data
+
+```
+
+
+
+#Overwrite names of cells in cluster 6
+```{r, fig.width=14, fig.height=6}
+df <- quads_fibroblasts@active.ident
+
+df <- as.data.frame(df)
+
+colnames(df) <- c("clusterid")
+
+quads_data_copy$cluster_idbackup <- quads_data_copy$cluster_id
+#quads_data$cluster_id <- quads_data$cluster_idbackup 
+
+df$clusterid <- as.character(df$clusterid)
+
+quads_data_copy$cluster_id <- as.character(quads_data_copy$cluster_id)
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "Fibroblasts"){
+        if (cell_type == "FBLNhi fibroblasts") {
+            quads_data_copy$cluster_id[barcode] <- "FBLNhi fibroblasts"
+        } else if (cell_type == "COL3A1hi fibroblasts") {
+            quads_data_copy$cluster_id[barcode] <- "COL3A1hi fibroblasts"
+        } else if (cell_type == "ABCA10hi fibroblasts") {
+            quads_data_copy$cluster_id[barcode] <- "ABCA10hi fibroblasts"
+        } else if (cell_type == "NR4A1hi fibroblasts") {
+            quads_data_copy$cluster_id[barcode] <- "NR4A1hi fibroblasts"
+        } else if (cell_type == "Dividing cells") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing fibroblasts / mural cells"
+        }
+    }
+}
+
+
+Idents(quads_data_copy) <- "cluster_id"
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = TRUE) + NoLegend()
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = F, split.by = "tendon_disease") + NoLegend()
+
+#make new object with new names of all (sub)clusters
+
+
+```
+
+
+
+#Open endothelial subcluster object
+```{r}
+DimPlot(quads_endothelial)
+
+levels(quads_endothelial@active.ident)
+
+
+```
+
+
+#Overwrite names of cells in endothelial clusters
+```{r, fig.width=14, fig.height=6}
+df <- quads_endothelial@active.ident
+
+df <- as.data.frame(df)
+
+colnames(df) <- c("clusterid")
+
+#quads_data_copy$cluster_idbackup <- quads_data_copy$cluster_id
+#quads_data$cluster_id <- quads_data$cluster_idbackup 
+
+df$clusterid <- as.character(df$clusterid)
+
+quads_data_copy$cluster_id <- as.character(quads_data_copy$cluster_id)
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "Mural cells"){
+        if (cell_type == "Pericytes") {
+            quads_data_copy$cluster_id[barcode] <- "Pericytes"
+        } else if (cell_type == "vSMCs") {
+            quads_data_copy$cluster_id[barcode] <- "vSMCs"
+        }    else if (cell_type == "Venular VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Venular VECs"
+        } else if (cell_type == "Arteriolar VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Arteriolar VECs"
+        } else if (cell_type == "Capillary VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Capillary VECs"
+        } else if (cell_type == "Dividing VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing VECs"
+        } else if (cell_type == "Lymphatic ECs") {
+            quads_data_copy$cluster_id[barcode] <- "Lymphatic ECs"
+        }
+    }
+}
+
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "Vascular endothelial cells"){
+        if (cell_type == "Venular VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Venular VECs"
+        } else if (cell_type == "Arteriolar VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Arteriolar VECs"
+        } else if (cell_type == "Capillary VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Capillary VECs"
+        } else if (cell_type == "Dividing VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing VECs"
+         }   else if (cell_type == "Pericytes") {
+            quads_data_copy$cluster_id[barcode] <- "Pericytes"
+        } else if (cell_type == "vSMCs") {
+            quads_data_copy$cluster_id[barcode] <- "vSMCs"
+        } else if (cell_type == "Lymphatic ECs") {
+            quads_data_copy$cluster_id[barcode] <- "Lymphatic ECs"
+        }
+    }
+}
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "Lymphatic endothelial cells"){
+        if (cell_type == "Venular VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Venular VECs"
+        } else if (cell_type == "Arteriolar VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Arteriolar VECs"
+        } else if (cell_type == "Capillary VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Capillary VECs"
+        } else if (cell_type == "Dividing VECs") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing VECs"
+         }   else if (cell_type == "Pericytes") {
+            quads_data_copy$cluster_id[barcode] <- "Pericytes"
+        } else if (cell_type == "vSMCs") {
+            quads_data_copy$cluster_id[barcode] <- "vSMCs"
+        } else if (cell_type == "Lymphatic ECs") {
+            quads_data_copy$cluster_id[barcode] <- "Lymphatic ECs"
+        }
+    }
+}
+
+
+Idents(quads_data_copy) <- "cluster_id"
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = TRUE) + NoLegend()
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = F, split.by = "tendon_disease") + NoLegend()
+
+#make new object with new names of all (sub)clusters
+
+
+```
+
+
+#Open fibroblast subcluster object
+```{r}
+DimPlot(quads_immune_1)
+
+levels(quads_immune_1@active.ident)
+
+
+```
+
+
+
+#Overwrite names of cells in immune clusters
+```{r, fig.width=14, fig.height=6}
+df <- quads_immune_1@active.ident
+
+df <- as.data.frame(df)
+
+colnames(df) <- c("clusterid")
+
+#quads_data_copy$cluster_idbackup <- quads_data_copy$cluster_id
+#quads_data$cluster_id <- quads_data$cluster_idbackup 
+
+df$clusterid <- as.character(df$clusterid)
+
+quads_data_copy$cluster_id <- as.character(quads_data_copy$cluster_id)
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "Macrophages"){
+        if (cell_type == "MERTKhi LYVE1hi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1hi macrophages"
+        } else if (cell_type == "T cells") {
+            quads_data_copy$cluster_id[barcode] <- "T cells"
+        }    else if (cell_type == "MERTKhi LYVE1lo macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1lo macrophages"
+        } else if (cell_type == "VCANhi DCs/Mono") {
+            quads_data_copy$cluster_id[barcode] <- "VCANhi DCs/monocytes"
+        } else if (cell_type == "CLEC10Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC10Ahi DCs"
+        } else if (cell_type == "NK cells") {
+            quads_data_copy$cluster_id[barcode] <- "NK cells"
+        } else if (cell_type == "MERTKlo PTPRGhi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKlo PTPRGhi macrophages"
+        } else if (cell_type == "Dividing cells") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing immune cells"
+        } else if (cell_type == "pDCs") {
+            quads_data_copy$cluster_id[barcode] <- "pDCs"
+        } else if (cell_type == "Granulocytes") {
+            quads_data_copy$cluster_id[barcode] <- "Granulocytes"
+        } else if (cell_type == "Osteoclasts") {
+            quads_data_copy$cluster_id[barcode] <- "Osteoclasts"
+        } else if (cell_type == "B cells") {
+            quads_data_copy$cluster_id[barcode] <- "B cells"
+        } else if (cell_type == "CLEC9Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC9Ahi DCs"
+        }
+    }
+}
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "Dividing macrophages"){
+        if (cell_type == "MERTKhi LYVE1hi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1hi macrophages"
+        } else if (cell_type == "T cells") {
+            quads_data_copy$cluster_id[barcode] <- "T cells"
+        }    else if (cell_type == "MERTKhi LYVE1lo macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1lo macrophages"
+        } else if (cell_type == "VCANhi DCs/Mono") {
+            quads_data_copy$cluster_id[barcode] <- "VCANhi DCs/monocytes"
+        } else if (cell_type == "CLEC10Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC10Ahi DCs"
+        } else if (cell_type == "NK cells") {
+            quads_data_copy$cluster_id[barcode] <- "NK cells"
+        } else if (cell_type == "MERTKlo PTPRGhi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKlo PTPRGhi macrophages"
+        } else if (cell_type == "Dividing cells") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing immune cells"
+        } else if (cell_type == "pDCs") {
+            quads_data_copy$cluster_id[barcode] <- "pDCs"
+        } else if (cell_type == "Granulocytes") {
+            quads_data_copy$cluster_id[barcode] <- "Granulocytes"
+        } else if (cell_type == "Osteoclasts") {
+            quads_data_copy$cluster_id[barcode] <- "Osteoclasts"
+        } else if (cell_type == "B cells") {
+            quads_data_copy$cluster_id[barcode] <- "B cells"
+        } else if (cell_type == "CLEC9Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC9Ahi DCs"
+        }
+    }
+}
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "T cells"){
+        if (cell_type == "MERTKhi LYVE1hi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1hi macrophages"
+        } else if (cell_type == "T cells") {
+            quads_data_copy$cluster_id[barcode] <- "T cells"
+        }    else if (cell_type == "MERTKhi LYVE1lo macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1lo macrophages"
+        } else if (cell_type == "VCANhi DCs/Mono") {
+            quads_data_copy$cluster_id[barcode] <- "VCANhi DCs/monocytes"
+        } else if (cell_type == "CLEC10Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC10Ahi DCs"
+        } else if (cell_type == "NK cells") {
+            quads_data_copy$cluster_id[barcode] <- "NK cells"
+        } else if (cell_type == "MERTKlo PTPRGhi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKlo PTPRGhi macrophages"
+        } else if (cell_type == "Dividing cells") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing immune cells"
+        } else if (cell_type == "pDCs") {
+            quads_data_copy$cluster_id[barcode] <- "pDCs"
+        } else if (cell_type == "Granulocytes") {
+            quads_data_copy$cluster_id[barcode] <- "Granulocytes"
+        } else if (cell_type == "Osteoclasts") {
+            quads_data_copy$cluster_id[barcode] <- "Osteoclasts"
+        } else if (cell_type == "B cells") {
+            quads_data_copy$cluster_id[barcode] <- "B cells"
+        } else if (cell_type == "CLEC9Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC9Ahi DCs"
+        }
+    }
+}
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "Granulocytes"){
+        if (cell_type == "MERTKhi LYVE1hi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1hi macrophages"
+        } else if (cell_type == "T cells") {
+            quads_data_copy$cluster_id[barcode] <- "T cells"
+        }    else if (cell_type == "MERTKhi LYVE1lo macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1lo macrophages"
+        } else if (cell_type == "VCANhi DCs/Mono") {
+            quads_data_copy$cluster_id[barcode] <- "VCANhi DCs/monocytes"
+        } else if (cell_type == "CLEC10Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC10Ahi DCs"
+        } else if (cell_type == "NK cells") {
+            quads_data_copy$cluster_id[barcode] <- "NK cells"
+        } else if (cell_type == "MERTKlo PTPRGhi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKlo PTPRGhi macrophages"
+        } else if (cell_type == "Dividing cells") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing immune cells"
+        } else if (cell_type == "pDCs") {
+            quads_data_copy$cluster_id[barcode] <- "pDCs"
+        } else if (cell_type == "Granulocytes") {
+            quads_data_copy$cluster_id[barcode] <- "Granulocytes"
+        } else if (cell_type == "Osteoclasts") {
+            quads_data_copy$cluster_id[barcode] <- "Osteoclasts"
+        } else if (cell_type == "B cells") {
+            quads_data_copy$cluster_id[barcode] <- "B cells"
+        } else if (cell_type == "CLEC9Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC9Ahi DCs"
+        }
+    }
+}
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "Dendritic cells"){
+        if (cell_type == "MERTKhi LYVE1hi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1hi macrophages"
+        } else if (cell_type == "T cells") {
+            quads_data_copy$cluster_id[barcode] <- "T cells"
+        }    else if (cell_type == "MERTKhi LYVE1lo macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1lo macrophages"
+        } else if (cell_type == "VCANhi DCs/Mono") {
+            quads_data_copy$cluster_id[barcode] <- "VCANhi DCs/monocytes"
+        } else if (cell_type == "CLEC10Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC10Ahi DCs"
+        } else if (cell_type == "NK cells") {
+            quads_data_copy$cluster_id[barcode] <- "NK cells"
+        } else if (cell_type == "MERTKlo PTPRGhi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKlo PTPRGhi macrophages"
+        } else if (cell_type == "Dividing cells") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing immune cells"
+        } else if (cell_type == "pDCs") {
+            quads_data_copy$cluster_id[barcode] <- "pDCs"
+        } else if (cell_type == "Granulocytes") {
+            quads_data_copy$cluster_id[barcode] <- "Granulocytes"
+        } else if (cell_type == "Osteoclasts") {
+            quads_data_copy$cluster_id[barcode] <- "Osteoclasts"
+        } else if (cell_type == "B cells") {
+            quads_data_copy$cluster_id[barcode] <- "B cells"
+        } else if (cell_type == "CLEC9Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC9Ahi DCs"
+        }
+    }
+}
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (quads_data_copy$cluster_id[barcode] == "Osteoclasts"){
+        if (cell_type == "MERTKhi LYVE1hi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1hi macrophages"
+        } else if (cell_type == "T cells") {
+            quads_data_copy$cluster_id[barcode] <- "T cells"
+        }    else if (cell_type == "MERTKhi LYVE1lo macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKhi LYVE1lo macrophages"
+        } else if (cell_type == "VCANhi DCs/Mono") {
+            quads_data_copy$cluster_id[barcode] <- "VCANhi DCs/monocytes"
+        } else if (cell_type == "CLEC10Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC10Ahi DCs"
+        } else if (cell_type == "NK cells") {
+            quads_data_copy$cluster_id[barcode] <- "NK cells"
+        } else if (cell_type == "MERTKlo PTPRGhi macrophages") {
+            quads_data_copy$cluster_id[barcode] <- "MERTKlo PTPRGhi macrophages"
+        } else if (cell_type == "Dividing cells") {
+            quads_data_copy$cluster_id[barcode] <- "Dividing immune cells"
+        } else if (cell_type == "pDCs") {
+            quads_data_copy$cluster_id[barcode] <- "pDCs"
+        } else if (cell_type == "Granulocytes") {
+            quads_data_copy$cluster_id[barcode] <- "Granulocytes"
+        } else if (cell_type == "Osteoclasts") {
+            quads_data_copy$cluster_id[barcode] <- "Osteoclasts"
+        } else if (cell_type == "B cells") {
+            quads_data_copy$cluster_id[barcode] <- "B cells"
+        } else if (cell_type == "CLEC9Ahi DCs") {
+            quads_data_copy$cluster_id[barcode] <- "CLEC9Ahi DCs"
+        }
+    }
+}
+
+
+
+
+Idents(quads_data_copy) <- "cluster_id"
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = TRUE) + NoLegend()
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = F, split.by = "tendon_disease") + NoLegend()
+
+#make new object with new names of all (sub)clusters
+
+
+```
+#Check idents and frequencies 
+```{r}
+proptable <- prop.table(table(Idents(quads_data_copy), quads_data_copy$patient), margin = 2)
+proptable
+
+identstable <- sort(table(Idents(quads_data_copy)), decreasing = T)
+
+identstable
+```
+
+#Build new factor for cluster id
+```{r}
+quads_data_copy$cluster_id <- factor(quads_data_copy$cluster_id, levels = c("FBLNhi fibroblasts", "COL3A1hi fibroblasts", "MERTKhi LYVE1hi macrophages", "ABCA10hi fibroblasts", "Pericytes", "MERTKhi LYVE1lo macrophages", "Adipocytes", "Venular VECs", "Arteriolar VECs", "Capillary VECs", "T cells", "Nervous system cells", "NR4A1hi fibroblasts", "Lymphatic ECs", "VCANhi DCs/monocytes", "vSMCs", "CLEC10Ahi DCs", "MERTKlo PTPRGhi macrophages", "Dividing fibroblasts / mural cells", "NK cells", "Dividing VECs", "Osteoblasts", "Dividing immune cells", "pDCs", "Granulocytes", "Osteoclasts", "B cells", "CLEC9Ahi DCs"))
+
+Idents(quads_data_copy) <- "cluster_id"
+```
+
+
+```{r, fig.width=19, fig.height=13}
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = TRUE, cols = c("#99cc00", "#ff9b19", "#8bc9c9", "#B09C85FF", "#0041c2", "#379975", "#f3ca00", "#f04a00", "#b7410e", "#f89880", "#e37197", "#00a2f3", "#CC3333", "#888888", "#eb0e45", "#4682b4", "#702438", "#09e686", "#a1caf1", "#f0b1d0", "#a1caf1", "#117733", "#a1caf1", "#be0032", "#0a2f8c", "#332288", "#f23f90", "#cf47ed")) + NoLegend()
+
+DimPlot(quads_data_copy, reduction = "umap",  repel = TRUE, label = F, pt.size = 1, cols = c("#99cc00", "#ff9b19", "#8bc9c9", "#B09C85FF", "#0041c2", "#379975", "#f3ca00", "#f04a00", "#b7410e", "#f89880", "#e37197", "#00a2f3", "#CC3333", "#888888", "#eb0e45", "#4682b4", "#702438", "#09e686", "#a1caf1", "#f0b1d0", "#a1caf1", "#117733", "#a1caf1", "#be0032", "#0a2f8c", "#332288", "#f23f90", "#cf47ed")) + NoLegend()
+
+
+```
+
+
+```{r, fig.width=14, fig.height=6}
+
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = F, split.by = "tendon_disease", cols = c("#99cc00", "#ff9b19", "#8bc9c9", "#B09C85FF", "#0041c2", "#379975", "#f3ca00", "#f04a00", "#b7410e", "#f89880", "#e37197", "#00a2f3", "#CC3333", "#888888", "#eb0e45", "#4682b4", "#702438", "#09e686", "#a1caf1", "#f0b1d0", "#a1caf1", "#117733", "#a1caf1", "#be0032", "#0a2f8c", "#332288", "#f23f90", "#cf47ed")) + NoLegend()
+```
+#Rename 2 fibroblast clusters
+```{r}
+new.cluster.ids <- c("FBLN1hi fibroblasts", "ADAM12hi fibroblasts", "MERTKhi LYVE1hi macrophages", "ABCA10hi fibroblasts", "Pericytes", "MERTKhi LYVE1lo macrophages", "Adipocytes", "Venular VECs", "Arteriolar VECs", "Capillary VECs", "T cells", "Nervous system cells", "NR4A1hi fibroblasts", "Lymphatic ECs", "VCANhi DCs/monocytes", "vSMCs", "CLEC10Ahi DCs", "MERTKlo PTPRGhi macrophages", "Dividing fibroblasts / mural cells", "NK cells", "Dividing VECs", "Osteoblasts", "Dividing immune cells", "pDCs", "Granulocytes", "Osteoclasts", "B cells", "CLEC9Ahi DCs")
+
+names(new.cluster.ids) <- levels(quads_data_copy)
+quads_data_copy <- RenameIdents(quads_data_copy, new.cluster.ids)
+
+
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = F, label.size = 5.0) + NoLegend()
+
+DimPlot(quads_data_copy, reduction = "umap", repel = TRUE, label = TRUE) + NoLegend()
+
+quads_data_copy$cluster_id <- Idents(quads_data_copy)
+```
+
+
+
+
+#Save RDS file
+```{r}
+saveRDS(quads_data_copy, file = "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/20240523_quads_overall_reannotated.RDS")
+
+```
+
+
+#Get cluster names and barcodes
+```{r}
+df <- quads_data_copy@active.ident
+
+df <- as.data.frame(df)
+
+df$barcodes <- rownames(df)
+
+colnames(df) <- c("cluster_id", "barcodes")
+
+head(df)
+
+write.csv(df, "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Barcodes_and_celltypes", row.names = F)
+```
+
+

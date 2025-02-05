@@ -1,0 +1,117 @@
+---
+title: "20240530_Quads_SCPubr.Rmd"
+author: "Jolet Mimpen"
+date: "2024-05-30"
+output: html_document
+---
+
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(tidyverse)
+library(Matrix)
+library(ggplot2)
+library(scales)
+library(RColorBrewer)
+library(harmony)
+library(cowplot)
+library(clustree)
+library(sctransform)
+#library(scCustomize)
+library(scuttle)
+library(celda)
+
+library(SCpubr)
+library(liana)
+```
+
+
+```{r, fig.width=15, fig.height=6}
+quads_data <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/20240523_quads_overall_reannotated.RDS")
+
+DimPlot(quads_data)
+```
+
+
+#Progeny pathway activation
+```{r, fig.width=15, fig.height=10}
+
+
+#Define your sample and assay:
+#sample <- SeuratObject
+#assay <- SeuratObject@assays$SoupXcounts@data
+
+# Retrieve prior knowledge network.
+progeny_network <- decoupleR::get_progeny(organism = "human")
+
+# Run weighted means algorithm.
+pathway_activities <- decoupleR::run_wmean(mat = as.matrix(quads_data@assays$SoupXcounts@data),
+                                   network = progeny_network,
+                                   .source = "source",
+                                   .targe = "target",
+                                   .mor = "weight",
+                                   times = 100,
+                                   minsize = 5)
+
+
+SCpubr::do_PathwayActivityPlot(sample = quads_data,
+                                      activities = pathway_activities)
+
+SCpubr::do_PathwayActivityPlot(sample = quads_data,
+                                      activities = pathway_activities,
+                               min.cutoff = -2.15,
+                               max.cutoff = 2.15,
+                                      split.by = "tendon_disease")
+
+write_csv(pathway_activities, file = "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/Pathway_activities_allcells.csv")
+
+
+```
+
+
+
+
+```{r, fig.width=20, fig.height=15}
+# Define your sample and assay.
+#sample <- quads_data
+#assay <- "SoupXcounts"
+
+# Retrieve prior knowledge network.
+network <- decoupleR::get_dorothea(organism = "human",
+                                   levels = c("A", "B", "C"))
+
+# Run weighted means algorithm.
+tf_activities <- decoupleR::run_wmean(mat = as.matrix(quads_data@assays$SoupXcounts@data),
+                                   network = network,
+                                   .source = "source",
+                                   .targe = "target",
+                                   .mor = "mor",
+                                   times = 100,
+                                   minsize = 5)
+
+SCpubr::do_TFActivityPlot(sample = quads_data,
+                                 activities = tf_activities)
+
+SCpubr::do_TFActivityPlot(sample = quads_data,
+                                 activities = tf_activities,
+                                      split.by = "tendon_disease")
+
+
+SCpubr::do_TFActivityPlot(sample = quads_data,
+                                 activities = tf_activities,
+                               min.cutoff = -2.2,
+                               max.cutoff = 4.9,
+                                      split.by = "tendon_disease")
+
+SCpubr::do_TFActivityPlot(sample = quads_data,
+                                 activities = tf_activities,
+                               min.cutoff = -2,
+                               max.cutoff = 3,
+                                      split.by = "tendon_disease")
+
+write_csv(pathway_activities, file = "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/TF_activities_allcells.csv")
+
+
+```

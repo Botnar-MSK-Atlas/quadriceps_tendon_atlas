@@ -1,0 +1,325 @@
+---
+title: "20240409_quads_fibroblastsonly"
+author: "Jolet Mimpen"
+date: "2024-04-09"
+output: html_document
+---
+
+
+```{r setup, load packages, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(tidyverse)
+library(Matrix)
+library(ggplot2)
+library(scales)
+library(RColorBrewer)
+library(harmony)
+library(cowplot)
+library(clustree)
+library(sctransform)
+#library(scCustomize)
+library(scuttle)
+library(celda)
+
+```
+
+
+#Data retrieval 
+```{r}
+quads_data <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20231130_quads_int_labelled.RDS")
+
+```
+
+
+
+#Subset Stromal only
+```{r, fig.width=12, fig.height=4}
+
+#Choose one of the two options below:
+quads_fibroblasts <- subset(quads_data, idents = c("Fibroblasts", "Dividing fibroblasts / mural cells"))
+
+#Then continue with Seurat/Harmony
+quads_fibroblasts <- quads_fibroblasts %>% 
+                Seurat::NormalizeData(verbose = FALSE) %>%
+                FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% 
+                ScaleData(verbose=FALSE) %>% 
+                RunPCA(npcs = 50, verbose=FALSE)
+
+quads_fibroblasts <- RunHarmony(quads_fibroblasts, group.by.vars = "orig.ident", plot_convergence = TRUE)
+
+ElbowPlot(quads_fibroblasts, ndims = 50)
+
+```
+
+#Make clustree
+```{r}
+
+library(clustree)
+
+dims.choice <- 20
+resolution.range <- seq(from = 0, to = 1.0, by = 0.1)
+quads_fibroblasts <- FindNeighbors(quads_fibroblasts, reduction = "harmony", dims = 1:dims.choice)
+quads_fibroblasts <- FindClusters(quads_fibroblasts, resolution = resolution.range)
+
+clustree(quads_fibroblasts, prefix = "SoupXcounts_snn_res.")
+
+
+```
+
+
+
+#UMAPs for every resolution
+```{r, fig.width=9, fig.height=5}
+
+quads_fibroblasts <- RunUMAP(quads_fibroblasts, reduction = "harmony", dims = 1:dims.choice)
+
+for (i in resolution.range){
+  Idents(quads_fibroblasts) <- paste0("SoupXcounts_snn_res.", i)
+  print(DimPlot(quads_fibroblasts, reduction = "umap", label = T) + ggtitle(paste0("Resolution ", i)) + theme(plot.title = element_text(hjust = 0.5)))
+}
+
+```
+
+
+#Choose resolution and plot UMAP
+```{r, fig.width=12, fig.height=6}
+
+Idents(quads_fibroblasts) <- "SoupXcounts_snn_res.0.2"
+
+DimPlot(quads_fibroblasts, reduction = "umap", label = F, repel = T, split.by = "tendon_disease")
+DimPlot(quads_fibroblasts, reduction = "umap", label = TRUE, repel = T, split.by = "tendon_disease")
+```
+
+
+
+#Plot Stromal only - check key markers
+```{r, fig.width=12, fig.height=6}
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "NEGR1", "HMCN1", "DCLK1",
+              "CLU", "COMP",  "CILP", "NOX4", "PRG4",
+              "PTPRC", "CD163", "MRC1", "MSR1", "MERTK", "LYVE1", "CLEC10A",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "TRDN", "TTN", "NEB", "TNNT1", "TNNT3", "PAX7",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "PLIN1", "AQP7", "ADIPOQ", 
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "ASPM", "DIAPH3", "TOP2A",
+              "BCL11A", "CUX2", "CLEC4C",
+              "IBSP", "SP7", "RUNX2",
+               "KIT", "CPA3", "IL18R1",
+              "MMP9", "ACP5", "SIGLEC15",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2")
+
+
+DotPlot(quads_fibroblasts, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - all stromal")
+
+DotPlot(quads_fibroblasts, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts", split.by = "tendon_disease") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - all stromal")
+
+
+geneName <- c("COL1A1", "COL1A2", "COL3A1",  "DCN", "PRG4",
+              "ABCA8", "COL15A1", "CD55", "DCLK1", "ELN", "FBN1", "FBLN1", "FBLN2", "FBLN5", "KCND2", "NEGR1", "NOVA1", "PDGFRA", "VIT",
+              "CADM1", "COL11A1", "COL11A2", "COL12A1", "COL24A1", "COMP", "CPXM2", "FMOD", "MET", "MKX", "ITGA10", "PIEZO2", "THBS4", "THSD4", "TNMD")
+
+DotPlot(quads_fibroblasts, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+DotPlot(quads_fibroblasts, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts", split.by = "tendon_disease") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - all stromal")
+
+
+
+```
+
+
+#Make Heatmap stromal only only
+```{r, fig.width=8, fig.height=10}
+stromal.submarkers <- FindAllMarkers(quads_fibroblasts, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+stromal.submarkers %>%
+    group_by(cluster) %>%
+    top_n(n = 25, wt = avg_log2FC) -> stromal.submarkers.top25
+
+
+DoHeatmap(quads_fibroblasts, features = stromal.submarkers.top25$gene) + scale_fill_viridis() + NoLegend()
+
+
+
+stromal.submarkers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> stromal.submarkers.top10
+
+
+DoHeatmap(quads_fibroblasts, features = stromal.submarkers.top10$gene) + scale_fill_viridis() + NoLegend()
+
+```
+
+
+#DotPlot with top10 markers
+```{r, fig.width=20, fig.height=6}
+geneName <- stromal.submarkers.top10$gene
+geneName <- unique(geneName)
+
+DotPlot(quads_fibroblasts, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - all stromal - res0.2")
+
+
+#VEC4vsVEC6 <- FindMarkers(quads_fibroblasts, ident.1 = "4", ident.2 = c("6"), verbose = T)
+#VEC4vsVEC6$geneName <- rownames(VEC4vsVEC6)
+
+```
+
+
+
+#Add labels for each cluster of overall object
+```{r, fig.height=6, fig.width=10}
+
+new.cluster.ids <- c("FBLNhi fibroblasts", "COL3A1hi fibroblasts", "ABCA10hi fibroblasts", "NR4A1hi fibroblasts", "Dividing cells")
+
+names(new.cluster.ids) <- levels(quads_fibroblasts)
+quads_fibroblasts <- RenameIdents(quads_fibroblasts, new.cluster.ids)
+
+
+DimPlot(quads_fibroblasts, reduction = "umap", repel = TRUE, label = F, label.size = 5.0, pt.size = 0.8) + NoLegend()
+
+DimPlot(quads_fibroblasts, reduction = "umap", repel = TRUE, label = TRUE) + NoLegend()
+
+DimPlot(quads_fibroblasts, reduction = "umap", repel = TRUE, label = TRUE, split.by = "tendon_disease") + NoLegend()
+
+
+#add names into the metadata
+quads_fibroblasts@meta.data$fibroblastcluster_id <- Idents(quads_fibroblasts)
+
+```
+
+
+#Make DimPlot with labelled cells and new colours
+```{r, fig.width=12, fig.height=5}
+DimPlot(quads_fibroblasts, reduction = "umap", repel = TRUE, label = TRUE, label.size = 5.0, split.by = "tendon_disease", cols = c( "#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1")) + NoLegend()
+
+DimPlot(quads_fibroblasts, reduction = "umap", repel = TRUE, label = TRUE, label.size = 5.0, cols = c( "#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1")) + NoLegend()
+
+
+umap_stromalonly_nolabel <- DimPlot(quads_fibroblasts, reduction = "umap", repel = TRUE, label = F, label.size = 5.0, split.by = "tendon_disease", cols = c( "#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1"))
+umap_stromalonly_nolabel
+
+ggsave("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202404_figures/Stromalonly_umap_nolabel.png", plot = umap_stromalonly_nolabel, width = 12, height = 5, bg = "white")
+
+rm(umap_stromalonly_nolabel)
+
+```
+
+
+
+```{r, fig.height=4, fig.width=6}
+DimPlot(quads_fibroblasts, reduction = "umap", repel = TRUE, label = F, label.size = 5.0, cols = c( "#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1"), ) + NoLegend()
+
+DimPlot(quads_fibroblasts, reduction = "umap", group.by = "tendon_disease", cols = c("#eb7323", "#4b2480")) + ggtitle(NULL) + NoLegend()
+
+```
+
+
+
+#Plot heatmap of DEGs
+```{r, fig.height=9.5, fig.width=6}
+DoHeatmap(quads_fibroblasts, features = stromal.submarkers.top10$gene, label = F, group.colors = c( "#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1")) + scale_fill_viridis() + NoLegend()
+
+DoHeatmap(quads_fibroblasts, features = stromal.submarkers.top10$gene, label = F, group.colors = c( "#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1")) + scale_fill_viridis()
+
+```
+
+
+#Violin plots for collagens
+```{r, fig.height=4.2, fig.width=5}
+VlnPlot(quads_fibroblasts, features = c("COL1A1"), cols = c("#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1")) + NoLegend()
+VlnPlot(quads_fibroblasts, features = c("COL1A2"), cols = c("#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1")) + NoLegend()
+VlnPlot(quads_fibroblasts, features = c("COL3A1"), cols = c("#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1")) + NoLegend()
+
+```
+
+
+
+#Plot UMAPs with annotation and new colours
+```{r, fig.height=5, fig.width=12}
+DimPlot(quads_fibroblasts, split.by = "tendon_disease", cols = c( "#99cc00", "#FFA319FF", "#B09C85FF" , "#CC3333", "#a1caf1"))
+```
+
+
+#FeaturePlots for highly DEGs
+```{r, fig.height=4, fig.width=15}
+FeaturePlot(quads_fibroblasts, features = c("FBLN1", "NOX4", "CILP"), ncol = 3)
+FeaturePlot(quads_fibroblasts, features = c("ADAM12", "COL3A1", "TNC"), ncol = 3)
+FeaturePlot(quads_fibroblasts, features = c("ABCA10", "CNTN4", "ABCA8"), ncol = 3)
+FeaturePlot(quads_fibroblasts, features = c("NR4A1", "NR4A3", "SEMA4A"), ncol = 3)
+
+```
+
+
+
+
+#FindMarkers for each fibroblast cell type
+```{r}
+levels(quads_fibroblasts$fibroblastcluster_id)
+
+FBLNhi_fibs_markers <- FindMarkers(quads_fibroblasts, ident.1 = "FBLN1hi fibroblasts", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+COL3A1hi_fibs_markers <- FindMarkers(quads_fibroblasts, ident.1 = "ADAM12hi fibroblasts", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+ABCA10hi_fibs_markers <- FindMarkers(quads_fibroblasts, ident.1 = "ABCA10hi fibroblasts", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+NR4A1hi_fibs_markers <- FindMarkers(quads_fibroblasts, ident.1 = "NR4A1hi fibroblasts", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+Dividing_fibs_markers <- FindMarkers(quads_fibroblasts, ident.1 = "Dividing cells", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+FBLNhi_fibs_markers$geneName <- rownames(FBLNhi_fibs_markers)
+COL3A1hi_fibs_markers$geneName <- rownames(COL3A1hi_fibs_markers)
+ABCA10hi_fibs_markers$geneName <- rownames(ABCA10hi_fibs_markers)
+NR4A1hi_fibs_markers$geneName <- rownames(NR4A1hi_fibs_markers)
+Dividing_fibs_markers$geneName <- rownames(Dividing_fibs_markers)
+
+Fibroblast_markers <- list()
+Fibroblast_markers[[1]] <- FBLNhi_fibs_markers
+Fibroblast_markers[[2]] <- COL3A1hi_fibs_markers
+Fibroblast_markers[[3]] <- ABCA10hi_fibs_markers
+Fibroblast_markers[[4]] <- NR4A1hi_fibs_markers
+Fibroblast_markers[[5]] <- Dividing_fibs_markers
+names(Fibroblast_markers) <- c("FBLNhi_fibs_markers", "COL3A1hi_fibs_markers", "ABCA10hi_fibs_markers", "NR4A1hi_fibs_markers", "Dividing_fibs_markers")
+
+```
+
+
+#Run GO:BP for each fibroblast subset
+```{r}
+
+library(gprofiler2)
+
+GOBP_results_fibroblasts <- list()
+
+for(i in 1:length(Fibroblast_markers)){
+    
+    
+set.seed(500)
+topcluster <- Fibroblast_markers[[i]] %>% 
+  filter(avg_log2FC > 0.5) %>%
+  top_n(n=100, wt = avg_log2FC)
+gost.res <- gost(topcluster$geneName, organism = "hsapiens", correction_method = "fdr", sources = "GO:BP")
+
+GOBP_results_fibroblasts[[i]] <- gost.res$result
+    
+
+      
+}
+
+names(GOBP_results_fibroblasts) <- c("FBLNhi_fibs_markers", "COL3A1hi_fibs_markers", "ABCA10hi_fibs_markers", "NR4A1hi_fibs_markers", "Dividing_fibs_markers")
+
+```
+
+
+
+
+
+#Save RDS object
+```{r}
+saveRDS(quads_fibroblasts, file = "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/202419_quads_fibroblasts_annotated.RDS")
+
+#to re-open quads_fibroblast file:
+#quads_fibroblasts <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/202419_quads_fibroblasts_annotated.RDS")
+```
+

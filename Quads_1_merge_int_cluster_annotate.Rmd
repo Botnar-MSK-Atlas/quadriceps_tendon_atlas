@@ -1,0 +1,755 @@
+---
+title: "Quads_merge_int_cluster_plot.Rmd"
+author: "Jolet Mimpen"
+date: "2025-01-21"
+output: html_document
+---
+
+
+```{r setup, load packages, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(tidyverse)
+library(Matrix)
+library(ggplot2)
+library(scales)
+library(RColorBrewer)
+library(harmony)
+library(cowplot)
+library(clustree)
+library(sctransform)
+#library(scCustomize)
+library(scuttle)
+library(celda)
+
+```
+
+
+#Load in all Seurat files
+```{r, read in objects}
+
+# Read in Seurat objects
+file_list <- list.files("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20231114_decontX_SoupX_scDblFinder/RDS_objects/")
+
+#Make a new list for the so objects
+Seurat.list <- list()
+# generate a list of so objects
+for (i in 1:length(file_list)){
+    print(i)
+        Seurat.list[[i]] <- readRDS(paste0("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20231114_decontX_SoupX_scDblFinder/RDS_objects/", file_list[i]))
+    print(file_list[i])
+    print(Seurat.list[[i]])
+}
+
+```
+
+
+
+#Change metadata
+```{r}
+#sample 1 MSK0778 tear
+#sample 2 MSK0779-1 tear
+#sample 3 MSK0779-2 tear
+#sample 4 MSK0792 healthy
+#sample 5 MSK0793 tear
+#sample 6 MSK1248 healthy
+#sample 7 MSK1250 healthy
+#sample 8 MSK1266 healthy
+
+Seurat.list[[1]]$tendon_disease <- "Rupture"
+Seurat.list[[2]]$tendon_disease <- "Rupture"
+Seurat.list[[3]]$tendon_disease <- "Rupture"
+Seurat.list[[4]]$tendon_disease <- "Healthy"
+Seurat.list[[5]]$tendon_disease <- "Rupture"
+Seurat.list[[6]]$tendon_disease <- "Healthy"
+Seurat.list[[7]]$tendon_disease <- "Healthy"
+Seurat.list[[8]]$tendon_disease <- "Healthy"
+
+Seurat.list[[6]]$disease_status <- "Tibial shaft fracture"
+
+
+Seurat.list[[6]]$surgical_procedure <- "Suprapatellar IM nail surgery"
+Seurat.list[[8]]$surgical_procedure <- "Suprapatellar IM nail surgery"
+
+
+#double-check that 7th item in the list is MSK1250
+Seurat.list[[7]]$orig.ident[1]
+
+```
+
+
+
+#Merge datasets, leaving out the MSK1250 sample
+```{r}
+Seurat.list.merged <- Reduce(function(x, y){merge(x,y)}, Seurat.list[- 7])
+
+rm(Seurat.list)
+```
+
+
+#Filter out high ambient contamination and doublets
+```{r, fig.width=15, fig.height=6}
+
+Seurat.list.merged <- subset(Seurat.list.merged, subset = scDblFinder.class == "singlet" & decontX_contamination < 0.3)
+
+
+Idents(Seurat.list.merged) <- Seurat.list.merged@meta.data$orig.ident
+
+VlnPlot(Seurat.list.merged, features = c("nFeature_RNA", "nCount_RNA"), ncol = 2, log = T)
+VlnPlot(Seurat.list.merged, features = c("nFeature_SoupXcounts", "nCount_SoupXcounts"), ncol = 2, log = T)
+VlnPlot(Seurat.list.merged, features = c("subsets_mito_percent", "decontX_contamination"), ncol = 2)
+```
+
+
+
+#Lognormalise all assays, run PCAs on SoupX assay
+```{r}
+
+DefaultAssay(object = Seurat.list.merged) <- "RNA"
+
+data.integratedLOG <- Seurat.list.merged %>% 
+                NormalizeData() %>%
+                FindVariableFeatures(selection.method = "vst", nfeatures = 5000) %>% 
+                ScaleData(verbose=FALSE)
+
+DefaultAssay(object = data.integratedLOG) <- "decontXcounts"
+
+data.integratedLOG <- data.integratedLOG %>% 
+                NormalizeData() %>%
+                FindVariableFeatures(selection.method = "vst", nfeatures = 5000) %>% 
+                ScaleData(verbose=FALSE)
+
+DefaultAssay(object = data.integratedLOG) <- "SoupXcounts"
+
+data.integratedLOG <- data.integratedLOG %>% 
+                NormalizeData() %>%
+                FindVariableFeatures(selection.method = "vst", nfeatures = 5000) %>% 
+                ScaleData(verbose=FALSE) %>%
+                RunPCA(npcs = 50, verbose=FALSE)
+```
+
+
+#Run Harmony integration
+```{r}
+data.integratedLOG.h <- RunHarmony(data.integratedLOG, group.by.vars = "orig.ident", plot_convergence = TRUE)
+
+```
+
+
+
+#Make Elbow plots
+```{r}
+ElbowPlot(data.integratedLOG.h, ndims = 50, reduction = "pca")
+ElbowPlot(data.integratedLOG.h, ndims = 50, reduction = "harmony")
+
+```
+
+
+
+
+#Make clustree
+```{r, fig.height=8, fig.width=8}
+library(clustree)
+
+dims.choice <- 40
+resolution.range <- seq(from = 0, to = 0.8, by = 0.1)
+data.integratedLOG.h <- FindNeighbors(data.integratedLOG.h, reduction = "harmony", dims = 1:dims.choice)
+data.integratedLOG.h <- FindClusters(data.integratedLOG.h, resolution = resolution.range)
+
+clustree(data.integratedLOG.h, prefix = "SoupXcounts_snn_res.")
+
+
+
+```
+
+
+
+#UMAPs for every resolution
+```{r}
+
+data.integratedLOG.h <- RunUMAP(data.integratedLOG.h, reduction = "harmony", dims = 1:dims.choice)
+
+for (i in resolution.range){
+  Idents(data.integratedLOG.h) <- paste0("SoupXcounts_snn_res.", i)
+  print(DimPlot(data.integratedLOG.h, reduction = "umap", label = T) + ggtitle(i) + theme(plot.title = element_text(hjust = 0.5)))
+}
+
+```
+
+
+
+
+
+#Clustering and plotting
+```{r, fig.width=10}
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.2"
+
+
+DimPlot(data.integratedLOG.h, reduction = "umap", label = T) +
+FeaturePlot(data.integratedLOG.h, reduction = "umap", features = "nCount_RNA")
+FeaturePlot(data.integratedLOG.h, reduction = "umap", features = "nFeature_RNA", max.cutoff = 1000)
+FeaturePlot(data.integratedLOG.h, reduction = "umap", features = "subsets_mito_percent")
+DimPlot(data.integratedLOG.h, reduction = "umap", group.by = "scDblFinder.class")
+DimPlot(data.integratedLOG.h, reduction = "umap", group.by = "patient")
+DimPlot(data.integratedLOG.h, reduction = "umap", group.by = "disease_status")
+DimPlot(data.integratedLOG.h, reduction = "umap", group.by = "tendon_disease")
+FeaturePlot(data.integratedLOG.h, reduction = "umap", features = "decontX_contamination", max.cutoff = 0.3)
+FeaturePlot(data.integratedLOG.h, reduction = "umap", features = "nCount_SoupXcounts", max.cutoff = 2000)
+FeaturePlot(data.integratedLOG.h, reduction = "umap", features = "nFeature_SoupXcounts", max.cutoff = 1000)
+VlnPlot(data.integratedLOG.h, features = "nFeature_RNA", log = T)
+VlnPlot(data.integratedLOG.h, features = "nCount_RNA", log = T)
+VlnPlot(data.integratedLOG.h, features = "subsets_mito_percent")
+VlnPlot(data.integratedLOG.h, features = "decontX_contamination")
+VlnPlot(data.integratedLOG.h, features = "nCount_SoupXcounts", log = T)
+VlnPlot(data.integratedLOG.h, features = "nFeature_SoupXcounts", log = T)
+
+```
+
+#UMAP split by surgical procedure
+```{r, fig.width=15, fig.height=6}
+
+DimPlot(data.integratedLOG.h, reduction = "umap", split.by = "surgical_procedure")
+DimPlot(data.integratedLOG.h, reduction = "umap", split.by = "tendon_disease")
+
+```
+
+
+
+#UMAP per sample
+```{r, fig.width=15, fig.height=10}
+DimPlot(data.integratedLOG.h, reduction = "umap", split.by = "patient", ncol = 3)
+```
+
+
+
+
+#General overview
+```{r, fig.width=15, fig.height=5}
+#multiple genes find ENS name and create data frame with both names
+
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "NEGR1", "HMCN1", "DCLK1",
+              "CLU", "COMP",  "CILP", "NOX4", "PRG4",
+              "PTPRC", "CD163", "MRC1", "MSR1", "MERTK", "LYVE1", "CLEC10A",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "TRDN", "TTN", "NEB", "TNNT1", "TNNT3", "PAX7",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "PLIN1", "AQP7", "ADIPOQ", 
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "ASPM", "DIAPH3", "TOP2A",
+              "CLEC4C", "CUX2", "IRF7", "IRF8",
+              "IBSP", "SP7", "RUNX2",
+               "KIT", "CPA3", "IL18R1",
+              "MMP9", "ACP5", "SIGLEC15",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2")
+
+geneName <- c("PTPRC",
+              "PLIN1", "PLIN4", "AQP7", "ADIPOQ", 
+              "CLEC4C", "CUX2", "IRF7", "IRF8",
+              "COL1A1", "COL1A2", "COL3A1", "DCN", "NEGR1", "HMCN1", "DCLK1", "NOX4", 
+              "ASPM", "DIAPH3", "TOP2A",
+              "KIT", "CPA3", "IL18R1",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "CD163", "MRC1", "MSR1", "MERTK", "LYVE1",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2",
+              "IBSP", "SP7", "RUNX2", "SPP1",
+              "MMP9", "ACP5", "SIGLEC15",
+              "CD247", "SKAP1", "THEMIS", "IL7R",
+              "PECAM1", "PTPRB", "FLT1", "VWF")
+
+
+DotPlot(data.integratedLOG.h, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+#Dotplots resolutions 0.1 to 0.6
+```{r, fig.width=15, fig.height=5}
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "NEGR1", "HMCN1", "DCLK1",
+              "CLU", "COMP",  "CILP", "NOX4", "PRG4",
+              "PTPRC", "CD163", "MRC1", "MSR1", "MERTK", "LYVE1", "CLEC10A",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "TRDN", "TTN", "NEB", "TNNT1", "TNNT3", "PAX7",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "PLIN1", "AQP7", "ADIPOQ", 
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "ASPM", "DIAPH3", "TOP2A",
+              "BCL11A", "CUX2", "CLEC4C",
+              "IBSP", "SP7", "RUNX2",
+               "KIT", "CPA3", "IL18R1",
+              "MMP9", "ACP5", "SIGLEC15",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2")
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.1"
+
+DotPlot(data.integratedLOG.h, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.1")
+
+
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.2"
+
+DotPlot(data.integratedLOG.h, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.2")
+
+
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.3"
+
+DotPlot(data.integratedLOG.h, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.3")
+
+
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.4"
+
+DotPlot(data.integratedLOG.h, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.4")
+
+
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.5"
+
+DotPlot(data.integratedLOG.h, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.5")
+
+
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.6"
+
+DotPlot(data.integratedLOG.h, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.6")
+
+```
+
+
+#Find markers for cluster 6
+```{r}
+cluster6 <- FindMarkers(data.integratedLOG.h, ident.1 = "6", only.pos = T)
+
+cluster6$geneName <- rownames(cluster6)
+```
+
+
+#Subset Cluster6
+```{r, fig.width=12, fig.height=4}
+#Choose one of the two options below:
+so.cluster6 <- subset(data.integratedLOG.h, idents = c("6"))
+
+#Then continue with Seurat/Harmony
+so.cluster6 <- so.cluster6 %>% 
+                Seurat::NormalizeData(verbose = FALSE) %>%
+                FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% 
+                ScaleData(verbose=FALSE) %>% 
+                RunPCA(npcs = 50, verbose=FALSE)
+
+so.cluster6 <- RunHarmony(so.cluster6, group.by.vars = "orig.ident", plot_convergence = TRUE)
+
+dims.choice <- 30
+so.cluster6 <- so.cluster6 %>% 
+  RunUMAP(reduction = "harmony", dims = 1:dims.choice) %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:dims.choice) %>% 
+  FindClusters(resolution = 0.3) %>% 
+  identity()
+DimPlot(so.cluster6, reduction = "umap", label = TRUE, pt.size = 0.7)
+DimPlot(so.cluster6, reduction = "umap", split.by = "tendon_disease")
+
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "NEGR1", "HMCN1", "DCLK1",
+              "CLU", "COMP",  "CILP", "NOX4", "PRG4",
+              "PTPRC", "CD163", "MRC1", "MSR1", "MERTK", "LYVE1", "CLEC10A",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "TRDN", "TTN", "NEB", "TNNT1", "TNNT3", "PAX7",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "PLIN1", "AQP7", "ADIPOQ", 
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "ASPM", "DIAPH3", "TOP2A",
+              "BCL11A", "CUX2", "CLEC4C",
+              "IBSP", "SP7", "RUNX2",
+               "KIT", "CPA3", "IL18R1",
+              "MMP9", "ACP5", "SIGLEC15",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2")
+
+
+DotPlot(so.cluster6, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - cluster 6 only - res0.3")
+
+
+
+```
+
+
+
+
+#Make Heatmap cluster 6 only
+```{r, fig.width=10, fig.height=10}
+cluster6.submarkers <- FindAllMarkers(so.cluster6, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+cluster6.submarkers %>%
+    group_by(cluster) %>%
+    top_n(n = 25, wt = avg_log2FC) -> cluster6.submarkers.top25
+
+
+DoHeatmap(so.cluster6, features = cluster6.submarkers.top25$gene) + scale_fill_viridis() + NoLegend()
+```
+
+#Add labels for each cluster within Cluster6 object
+```{r, fig.height=6, fig.width=10}
+
+
+new.cluster.ids <- c("Nervous system cells", "Dendritic cells") 
+
+
+names(new.cluster.ids) <- levels(so.cluster6)
+so.cluster6 <- RenameIdents(so.cluster6, new.cluster.ids)
+
+
+DimPlot(so.cluster6, reduction = "umap", repel = TRUE, label = F, label.size = 5.0, pt.size = 0.8) + NoLegend()
+
+DimPlot(so.cluster6, reduction = "umap", repel = TRUE, label = TRUE, label.size = 5.0, pt.size = 0.8) + NoLegend()
+
+so.cluster6$clusterid <- Idents(so.cluster6)
+
+
+#data.integratedLOG.h@meta.data$clusternames_res0.4_long <- Idents(data.integratedLOG.h)
+
+```
+
+
+
+
+
+#Make Heatmap
+```{r, fig.width=15, fig.height=25}
+general.markers <- FindAllMarkers(data.integratedLOG.h, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+general.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+
+DoHeatmap(data.integratedLOG.h, features = top10$gene) + scale_fill_viridis() + NoLegend()
+```
+
+
+
+#Fibroblast markers
+```{r, fig.width=12, fig.height=5}
+
+
+#geneName <- c("COL1A1", "COL1A2", "COL3A1",  "DCN", "PRG4", "ABCA8", "COL15A1", "CD55", "DCLK1", "ELN", "FBN1", "FBLN1", "FBLN2", "FBLN5", "KCND2", "NEGR1", "NOVA1", "PDGFRA", "VIT", "CADM1", "COL11A1", "COL11A2", "COL12A1", "COL24A1", "COMP", "CPXM2", "FMOD", "MET", "MKX", "ITGA10", "PIEZO2", "THBS4", "THSD4", "TNMD")
+
+geneName <- c("NOX4", "ITGA11", "DCN", "KCNMA1",  "GALNT15", "KLHL29", "THBS4", "NOVA1", "COMP", "COL14A1",
+              "PRG4", "FN1", "ITGB8", "ZNF385B", "CRTAC1", "ITGBL1", "TMEM196", "SEMA5A", "DELEC1", "CLU", 
+              "NEGR1", "ABCA10", "PTGFR", "ABCA8", "KAZN", "DCLK1", "ENSG00000231606", "VCAN", "LAMA2", "VCAN-AS1", 
+              "SLC35F4", "FGFR2", "POSTN", "ENSG00000231873", "KIF26B", "ADAM12", "NAV3", "GLIS3")
+
+
+plot5 <- DotPlot(data.integratedLOG.h, features = geneName, cols = c("blue", "red"))
+
+plot5 +  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+#remove(geneName, plot4) #cleanup
+```
+
+
+
+#All collagens
+```{r, fig.width=10, fig.height=4}
+
+geneName <- c("COL1A1", "COL1A2", "COL2A1", "COL3A1", "COL4A1","COL4A2","COL4A3", "COL4A4", "COL4A5", "COL4A6", "COL5A1", "COL5A2", "COL5A3", "COL6A1", "COL6A2", "COL6A3", "COL6A5", "COL7A1", "COL8A1", "COL8A2", "COL9A1", "COL9A2", "COL9A3", "COL10A1",  "COL11A1", "COL11A2", "COL12A1", "COL13A1", "COL14A1", "COL15A1", "COL16A1", "COL17A1", "COL18A1", "COL19A1", "COL20A1", "COL21A1", "COL22A1", "COL23A1", "COL24A1", "COL25A1", "EMID2", "COL27A1", "COL28A1", "COL29A1")
+
+plot4 <- DotPlot(data.integratedLOG.h, features = geneName, cols = c("blue", "red"))
+
+plot4 +  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+
+
+#Cell cycle markers
+```{r, fig.width=14, fig.height=5}
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.1"
+
+dotplot.sgenes.res0.1 <- DotPlot(data.integratedLOG.h, features = s.genes, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.1 - S genes")
+dotplot.sgenes.res0.1
+
+dotplot.g2mgenes.res0.1 <- DotPlot(data.integratedLOG.h, features = g2m.genes, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.1 - G2M genes")
+dotplot.g2mgenes.res0.1
+
+
+
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.2"
+
+dotplot.sgenes.res0.2 <- DotPlot(data.integratedLOG.h, features = s.genes, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.2 - S genes")
+dotplot.sgenes.res0.2
+
+dotplot.g2mgenes.res0.2 <- DotPlot(data.integratedLOG.h, features = g2m.genes, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - res0.2 - G2M genes")
+dotplot.g2mgenes.res0.2
+
+
+DotPlot(data.integratedLOG.h, features = s.genes, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("S genes")
+
+
+DotPlot(data.integratedLOG.h, features = g2m.genes, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("G2M genes")
+
+
+
+```
+
+
+
+```{r, fig.width=12, fig.height=10}
+dotplot.cellcyclegenes.res0.1 <- cowplot::plot_grid(dotplot.sgenes.res0.1, dotplot.g2mgenes.res0.1, ncol = 1)
+
+dotplot.cellcyclegenes.res0.1
+
+dotplot.cellcyclegenes.res0.2 <- cowplot::plot_grid(dotplot.sgenes.res0.2, dotplot.g2mgenes.res0.2, ncol = 1)
+
+dotplot.cellcyclegenes.res0.2
+
+
+```
+
+
+
+
+#Add labels for each cluster of overall object
+```{r, fig.height=6, fig.width=10}
+
+Idents(data.integratedLOG.h) <- "SoupXcounts_snn_res.0.2"
+
+new.cluster.ids <- c("Fibroblasts", "Macrophages", "Vascular endothelial cells",  "Mural cells",  "Adipocytes", "T cells", "6", "Lymphatic endothelial cells", "Dividing fibroblasts / mural cells", "Osteoblasts", "Granulocytes", "Osteoclasts", "Dividing macrophages")
+
+
+names(new.cluster.ids) <- levels(data.integratedLOG.h)
+data.integratedLOG.h <- RenameIdents(data.integratedLOG.h, new.cluster.ids)
+
+
+DimPlot(data.integratedLOG.h, reduction = "umap", repel = TRUE, label = F, label.size = 5.0, pt.size = 0.8) + NoLegend()
+
+DimPlot(data.integratedLOG.h, reduction = "umap", repel = TRUE, label = TRUE, label.size = 5.0, pt.size = 0.8) + NoLegend()
+
+#add names into the metadata
+data.integratedLOG.h@meta.data$cluster_id <- Idents(data.integratedLOG.h)
+
+```
+
+
+#Overwrite names of cells in cluster 6
+```{r}
+df <- so.cluster6@active.ident
+
+df <- as.data.frame(df)
+
+colnames(df) <- c("clusterid")
+
+data.integratedLOG.h$cluster_idbackup <- data.integratedLOG.h$cluster_id
+#data.integratedLOG.h$cluster_id <- data.integratedLOG.h$cluster_idbackup 
+
+df$clusterid <- as.character(df$clusterid)
+data.integratedLOG.h$cluster_id <- as.character(data.integratedLOG.h$cluster_id)
+
+for (i in seq_len(nrow(df))){
+    barcode <- rownames(df)[i]
+    cell_type <- df$clusterid[i]
+   
+    if (data.integratedLOG.h$cluster_id[barcode] == "6"){
+        if (cell_type == "Dendritic cells") {
+            data.integratedLOG.h$cluster_id[barcode] <- "Dendritic cells"
+        } else if (cell_type == "Nervous system cells") {
+            data.integratedLOG.h$cluster_id[barcode] <- "Nervous system cells"
+        }
+    }
+}
+
+Idents(data.integratedLOG.h) <- "cluster_id"
+DimPlot(data.integratedLOG.h, reduction = "umap", repel = TRUE, label = TRUE, label.size = 5.0, pt.size = 0.8)
+
+#make new object with new names of all (sub)clusters
+quads_data <- data.integratedLOG.h
+
+```
+
+
+#Re-order the levels of cell types
+```{r, fig.width=12, fig.height=6}
+quads_data$cluster_id <- factor(quads_data$cluster_id, levels = c("Fibroblasts", "Macrophages", "Vascular endothelial cells",  "Mural cells",  "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Dividing fibroblasts / mural cells", "Dendritic cells", "Osteoblasts", "Granulocytes", "Osteoclasts", "Dividing macrophages"))
+
+Idents(quads_data) <- "cluster_id"
+```
+
+#UMAPs labelled and unlablled with new colours
+```{r, fig.width=9, fig.height=6}
+
+umap_labelled <- DimPlot(quads_data, reduction = "umap", repel = TRUE, label = TRUE, label.size = 5.0, cols = c("#e25822",  "#499999", "#f28e2b",  "#4e79a7",  "#f3c300", "#e68fac", "#8db600",  "#888888",  "#a1caf1", "#be0032", "#117733", "#332288", "#A55194", "#661100"))  + NoLegend()
+umap_labelled
+
+umap_notlabelled <- DimPlot(quads_data, reduction = "umap", repel = TRUE, label = F, label.size = 5.0, cols = c("#e25822",  "#499999", "#f28e2b",  "#4e79a7",  "#f3c300", "#e68fac", "#8db600",  "#888888",  "#a1caf1", "#be0032", "#117733", "#332288", "#A55194", "#661100")) + NoLegend()
+umap_notlabelled
+
+ggsave("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202311_figures/UMAP_labelled.png", plot = umap_labelled, width = 9, height = 6, bg = "white")
+ggsave("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202311_figures/UMAP_notlabelled.png", plot = umap_notlabelled, width = 9, height = 6, bg = "white")
+
+rm(umap_labelled, umap_notlabelled)
+```
+
+
+```{r, fig.width=10, fig.height=5}
+genes <- c("NOTCH3", "MYH11", "MYH9", "DES", "MCAM", "RGS5", "ACTA2", "PDGFRB", "COL4A1", "KCNJ8", "MYL9", "ABCC9")
+
+quads_data <- SetIdent(quads_data, value = quads_data$cluster_id)
+
+DotPlot(quads_data, features = genes, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - labelled")
+
+```
+
+
+
+#Re-run dotplot
+```{r, fig.width=17, fig.height=5}
+#for res0.4
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "NEGR1", "HMCN1", "DCLK1",
+              "CLU", "COMP",  "CILP", "NOX4", "PRG4",
+              "PTPRC", "F13A1", "CD163", "MRC1", "MSR1",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "TRDN", "TTN", "NEB", "TNNT1", "TNNT3", "PAX7",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "PLIN1", "AQP7", "ADIPOQ", 
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "ASPM", "DIAPH3", "TOP2A",
+              "BCL11A", "CUX2", "CLEC4C",
+              "IBSP", "SP7", "RUNX2",
+               "KIT", "CPA3", "IL18R1",
+              "MMP9", "ACP9", "ACP5", "SIGLEC15",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2")
+
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN", "ABI3BP", "NOVA1",  "NEGR1", "HMCN1", "DCLK1", "FBLN1", #fibroblasts
+              "PTPRC", "F13A1", "CD163", "MRC1", "MSR1", "MERTK", "FOLR2", #macrophages
+              "PECAM1", "PTPRB", "FLT1", "VWF", "EMCN", #vascularendothelialcells
+              "NOTCH3", "PDGFRB", "MYO1B", "EBF2",   #mural cells
+              "PLIN1", "PLIN4", "AQP7", "ADIPOQ", "LPL",
+              "CD247", "SKAP1", "THEMIS", "IL7R", "ANK3",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2",
+              "MMRN1", "PROX1", "PKHD1L1", "LYVE1", "SEMA3A",
+              "ASPM", "DIAPH3", "TOP2A", "CENPE", "MELK",
+              "CLEC4C", "BCL11A", "CUX2", "IRF8", "PLAC8",
+              "IBSP", "SP7", "RUNX2",  "ALPL", "GJA1",
+              "KIT", "CPA3", "IL18R1", "MS4A2", "GATA2",
+              "SPP1", "MMP9", "ACP5", "SIGLEC15", "CA2")
+
+DotPlot(quads_data, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+#use this to plot and change the title for the gene name
+
+quads_data <- SetIdent(quads_data, value = quads_data$cluster_id)
+
+dotplot_overview <- DotPlot(quads_data, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("Quads merged/integrated - SoupX counts - labelled")
+dotplot_overview
+
+ggsave("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202311_figures/dotplot_overview.png", plot = dotplot_overview, width = 15, height = 5, bg = "white")
+
+rm(dotplot_overview)
+```
+
+#By disease
+```{r, fig.width=17, fig.height=8}
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN", "ABI3BP", "NOVA1",  "NEGR1", "HMCN1", "DCLK1", "FBLN1", #fibroblasts
+              "PTPRC", "F13A1", "CD163", "MRC1", "MSR1", "MERTK", "FOLR2", #macrophages
+              "PECAM1", "PTPRB", "FLT1", "VWF", "EMCN", #vascularendothelialcells
+              "NOTCH3", "PDGFRB", "MYO1B", "EBF2",   #mural cells
+              "PLIN1", "PLIN4", "AQP7", "ADIPOQ", "LPL",
+              "CD247", "SKAP1", "THEMIS", "IL7R", "ANK3",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2",
+              "MMRN1", "PROX1", "PKHD1L1", "LYVE1", "SEMA3A",
+              "ASPM", "DIAPH3", "TOP2A", "CENPE", "MELK",
+              "CLEC4C", "BCL11A", "CUX2", "IRF8", "PLAC8",
+              "IBSP", "SP7", "RUNX2",  "ALPL", "GJA1",
+              "KIT", "CPA3", "IL18R1", "MS4A2", "GATA2",
+              "SPP1", "MMP9", "ACP5", "SIGLEC15", "CA2")
+
+DotPlot(quads_data, features = geneName, cols = c("#4b2480",  "#eb7323"), assay = "SoupXcounts", split.by = "tendon_disease") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+```
+
+
+#Heatmap top5
+```{r, fig.height=12, fig.width=8}
+Idents(quads_data) <- "cluster_idbackup"
+DimPlot(quads_data, reduction = "umap", repel = TRUE, label = TRUE, label.size = 5.0, cols = c("#e25822",  "#499999", "#f28e2b",  "#4e79a7",  "#f3c300", "#e68fac", "#8db600",  "#888888",  "#a1caf1", "#be0032", "#117733", "#332288", "#A55194", "#661100"))  + NoLegend()
+
+general.markers <- FindAllMarkers(quads_data, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+
+general.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) -> top5
+
+top5heatmap <- DoHeatmap(quads_data, features = top5$gene, label = F, group.colors = c("#e25822",  "#499999", "#f28e2b",  "#4e79a7",  "#f3c300", "#e68fac", "#8db600",  "#888888",  "#a1caf1", "#be0032", "#117733", "#332288", "#A55194", "#661100")) + scale_fill_viridis() + NoLegend()
+top5heatmap
+
+general.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 6, wt = avg_log2FC) -> top6
+
+top5heatmap <- DoHeatmap(quads_data, features = top6$gene, label = F, group.colors = c("#e25822",  "#499999", "#f28e2b",  "#4e79a7",  "#f3c300", "#e68fac", "#8db600",  "#888888",  "#a1caf1", "#be0032", "#117733", "#332288", "#A55194", "#661100")) + scale_fill_viridis() + NoLegend()
+top5heatmap
+
+
+ggsave("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202311_figures/Heatmap_top5.png", plot = top5heatmap, width = 8, height = 9, bg = "white")
+
+rm(top5heatmap)
+
+```
+
+
+#Re-order the levels of patients
+```{r, fig.width=12, fig.height=6}
+quads_data$patient <- factor(quads_data$patient, levels = c("MSK0792", "MSK1248",  "MSK1266", "MSK0778", "MSK0779", "MSK0793"))
+
+
+DimPlot(quads_data, reduction = "umap", repel = TRUE, label = F, split.by = "patient", ncol = 3, cols = c("#e25822",  "#499999", "#f28e2b",  "#4e79a7",  "#f3c300", "#e68fac", "#8db600",  "#888888",  "#a1caf1", "#be0032", "#117733", "#332288", "#A55194", "#661100")) + NoLegend()
+
+
+ggsave("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202311_figures/UMAP_patients.png", plot = umap_patients, width = 12, height = 8, bg = "white")
+rm(umap_patients)
+
+```
+
+
+#UMAP split by tendon disease
+```{r, fig.width=15, fig.height=6}
+Idents(quads_data) <- "cluster_id"
+
+umap_healthyvsdisease <- DimPlot(quads_data, reduction = "umap", split.by = "tendon_disease", cols = c("#e25822",  "#499999", "#f28e2b",  "#4e79a7",  "#f3c300", "#e68fac", "#8db600",  "#888888",  "#a1caf1", "#be0032", "#117733", "#332288", "#A55194", "#661100"), label = F) + NoLegend() 
+umap_healthyvsdisease
+
+ggsave("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202311_figures/UMAP_healthyvsdisease_2.png", plot = umap_healthyvsdisease, width = 15, height = 6, bg = "white")
+rm(umap_healthyvsdisease)
+
+```
+
+#UMAP coloured by tendon disease
+```{r, fig.width=9, fig.height=6}
+Idents(quads_data) <- "cluster_id"
+
+umap_tendondisease <- DimPlot(quads_data, reduction = "umap", group.by = "tendon_disease", cols = c("#4b2480",  "#eb7323"))
+umap_tendondisease
+
+DimPlot(quads_data, reduction = "umap", group.by = "tendon_disease", cols = c("#4b2480", "#eb7323")) + theme(legend.position = "bottom")
+
+
+ggsave("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202311_figures/UMAP_colouredbytendondisease.png", plot = umap_tendondisease, width = 9, height = 6, bg = "white")
+rm(umap_tendondisease)
+
+```
+
+
+

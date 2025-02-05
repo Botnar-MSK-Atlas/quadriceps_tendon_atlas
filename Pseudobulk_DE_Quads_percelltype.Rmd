@@ -1,0 +1,801 @@
+---
+title: "Pseudobulk & differential expression"
+author: "Carla Cohen and Jolet Mimpen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Pseudobulk and differential expression
+
+The aim of this script is to perform pseudobulk per sample, and then perform differential expression across microanatomy.  
+
+### Set up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+library(tidyverse)
+library(DESeq2)
+library(DEGreport)
+library(EnhancedVolcano)
+library(gprofiler2)
+library(dplyr)
+library(sf)
+library(raster)
+library(dplyr)
+library(stringr) # for working with strings (pattern matching)
+library(tidyr)   # for unite() and separate()
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Pseudobulk.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/DEseq2_results/"))
+dir.create(paste0(directory, "/MA_plots/"))
+dir.create(paste0(directory, "/Pre-heatmap/"))
+dir.create(paste0(directory, "/Post-heatmap/"))
+dir.create(paste0(directory, "/Pre-PCA/"))
+dir.create(paste0(directory, "/Post-PCA/"))
+
+```
+
+Set the colours 
+```{r}
+quads.colours <- c("#e25822",  "#499999", "#f28e2b",  "#4e79a7",  "#f3c300", "#e68fac", "#8db600",  "#888888",  "#a1caf1", "#be0032", "#117733", "#332288", "#A55194", "#661100")
+
+names(quads.colours) <- c("Fibroblasts", "Macrophages", "Vascular endothelial cells",  "Mural cells",  "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Dividing fibroblasts / mural cells", "Dendritic cells", "Osteoblasts", "Granulocytes", "Osteoclasts", "Dividing macrophages")
+
+# microanatomy colours
+Okabe_Ito <-  c("#ff3d00", "#117733")
+ma.cols <-  c(Healthy = Okabe_Ito[2], Rupture = Okabe_Ito[1])
+
+```
+
+
+Read in Seurat object
+
+```{r}
+#quads_data <- readRDS("/project/tendonhca/shared/chromium/analysis/")
+quads_data
+```
+Simplify cell names
+
+```{r}
+
+df <- data.frame("cluster_id" = unique(quads_data$cluster_id))
+df$cell_annotation <- c("Dividingmacrophages", 
+                        "Macrophages", 
+                        "VEC", 
+                        "Fibroblasts", 
+                        "Osteoclasts", 
+                        "Muralcells", 
+                        "Dendriticcells", 
+                        "Osteoblasts", 
+                        "LEC", 
+                        "Dividingfibandmural", 
+                        "Tcells", 
+                        "Adipocytes", 
+                        "Granulocytes", 
+                        "Nervoussystemcells")
+df
+
+quads_data$cell_annotation <- left_join(quads_data[[]], df)
+```
+Plot UMAP for reference
+
+```{r, fig.width=8, fig.height=10}
+# visualise the distribution of clusters based on sample (patient) 
+cell_plot <- DimPlot(quads_data, reduction = 'umap', group.by = 'cell_annotation', label = TRUE)
+cond_plot <- DimPlot(quads_data, reduction = 'umap', group.by = 'patient', shuffle = TRUE)
+plot_grid(cell_plot, cond_plot, ncol = 1)
+```
+
+## Pseudobulk
+
+We want to pseudobulk using sample and microanatomy information. We already have this information in the "sample" column in the format MSK0785-Ach-Enth. 
+
+[from Jolet/Marie]
+```{r}
+
+# 1. counts matrix - sample level
+
+#Aggregation of counts to sample level per cell type
+cts <- AggregateExpression(quads_data, 
+                    group.by = c("cell_annotation", "patient"),
+                    assays = 'SoupXcounts',
+                    slot = "counts",
+                    return.seurat = FALSE)
+
+# transpose & convert to df
+cts.t <- as.data.frame(t(cts$SoupXcounts))
+
+# get values where to split
+splitRows <- gsub('_.*', '', rownames(cts.t))
+
+# split data.frame into a list of df for each cell type
+cts.split <- split.data.frame(cts.t,
+                 f = factor(splitRows), 
+                 drop = TRUE)
+
+# fix colnames and transpose function
+rownames_change <- function(x){
+  rownames(x) <- gsub('.*_(.*)', '\\1', rownames(x))
+  return(x)
+}
+
+# create a list of df for each cell type
+counts_list <- list()
+for (i in 1:length(names(cts.split))){
+    counts_list[[i]] <- t(rownames_change(cts.split[[i]]))
+}
+
+names(counts_list) <- names(cts.split)
+```
+
+### Generate sample level metadata 
+
+```{r}
+
+colData <- data.frame(sample = unique(quads_data[["patient"]]))
+colData <- left_join(colData, quads_data[[]], keep = FALSE, multiple = "first")
+colData <- colData %>% dplyr::select(sample, patient, tendon_disease, sequencing_date, sex, age)
+colData
+
+```
+
+
+
+```{r}
+find_celltypes_to_run <- function(celltype){
+    positions <- which(colData$patient %in% colnames(counts_list[[celltype]]))
+    coldata <- colData[positions, ]
+    rownames(coldata) <- coldata$patient
+    coldata <- coldata[order(row.names(coldata)), ]
+    # check that there are at least 3 samples in each condition
+    n_healthy <- coldata %>% filter(coldata$tendon_disease =="Healthy") %>% nrow()
+    n_rupture <- coldata %>% filter(coldata$tendon_disease =="Rupture") %>% nrow()
+    if (n_healthy <3 | n_rupture < 3){
+        # print("Too few replicates to perform DEseq2")
+        new_celltype <- NULL
+    } else {
+        # print("Enough replicates")
+        new_celltype <- celltype
+    }
+    return(new_celltype)
+}
+
+```
+
+
+```{r}
+
+celltypes_list <- as.list(names(counts_list))
+new_celltypes_list <- list()
+for (i in 1:length(celltypes_list)){
+    # print(paste0("Analyzing celltype: ", celltypes_list[[i]]))
+    new_celltypes_list[[i]] <- find_celltypes_to_run(celltypes_list[[i]])
+}
+# remove empty items from the list
+celltypes_list = new_celltypes_list[-which(sapply(new_celltypes_list, is.null))]
+print("Celltypes with enough replicates to perform DEseq2")
+celltypes_list
+# temporarily subset the celltypes list for testing
+#celltypes_list <- celltypes_list[c(1,4)]
+```
+
+
+## FUNCTION to perform DEseq2 on each cell type of interest with "Healthy" as the reference
+```{r}
+# Create a function to run DESeq2
+run_DEseq2_MB <- function (celltype){
+    out <- list()
+    
+    # filter the colData to samples that are present in the counts matrix
+    positions <- which(colData$patient %in% colnames(counts_list[[celltype]]))
+    coldata <- colData[positions, ]
+    rownames(coldata) <- coldata$patient
+    coldata <- coldata[order(row.names(coldata)), ]
+    
+    
+                    
+                    
+                    #reorder colnames in counts data
+                    counts_list[[celltype]] <- counts_list[[celltype]][,order(colnames(counts_list[[celltype]]))]
+                    
+                    # Create DESeq2 object   
+                    dds <- DESeqDataSetFromMatrix(countData = round(counts_list[[celltype]]),
+                                       colData = coldata,
+                                       design = ~ tendon_disease)
+                
+                    # filter (keep the genes that have a minimum of 10 reads)
+                    keep <- rowSums(counts(dds)) >=10
+                    dds <- dds[keep,]
+                    dds$tendon_disease <- relevel(dds$tendon_disease, ref = "Healthy")
+                    
+                    # run DESeq2
+                    dds <- DESeq(dds)
+                    out[["dds"]] <- dds
+                    # Generate results objects 
+                    out[["res_RupturevsHealthy"]] <- results(dds, name = "tendon_disease_Rupture_vs_Healthy")
+                    out[["res_RupturevsHealthy_lfcshrink"]] <- lfcShrink(dds, coef = "tendon_disease_Rupture_vs_Healthy", type = "apeglm")
+                
+                
+                    return(out)
+                
+                    # print results summary
+                    cat(summary(res_RupturevsHealthy)) # have to use cat not print
+                    cat(summary(res_RupturevsHealthy_lfcshrink))
+                    }
+
+
+
+```
+
+
+Make a list of cell types and apply the function over the list
+
+NB getting the following warning so need to do some data QC to look for additional batch effects
+>   note: fitType='parametric', but the dispersion trend was not well captured by the
+>   function: y = a/x + b, and a local regression fit was automatically substituted.
+>   specify fitType='local' or 'mean' to avoid this message next time.
+
+#Run function on cell types list
+```{r}
+
+DEseq2_results_cells <- list()
+for (i in 1:length(celltypes_list)){
+    print(paste0("Analyzing celltype: ", celltypes_list[[i]]))
+    DEseq2_results_cells[[i]] <- run_DEseq2_MB(celltypes_list[[i]])
+}
+names(DEseq2_results_cells) <- celltypes_list
+
+summary(DEseq2_results_cells)
+```
+
+#FUNCTION to save the files
+```{r}
+save_DEseq2_MB <- function (DEseq2_results, celltype){
+        
+    
+    write.csv(DEseq2_results$res_RupturevsHealthy, 
+              paste0(directory, "/DEseq2_results/", celltype, "_RupturevsHealthy.csv"))
+    write.csv(DEseq2_results$res_RupturevsHealthy_lfcshrink, 
+              paste0(directory, "/DEseq2_results/", celltype, "_RupturevsHealthy_lfcshrink.csv"))
+}
+```
+
+#Run the function to save the files
+```{r}
+
+for (i in 1:length(DEseq2_results_cells)){
+    save_DEseq2_MB(DEseq2_results_cells[[i]], celltypes_list[[i]])
+}
+```
+
+
+## DEseq2 data QC
+
+Plot PCA prior to any normalisation to look for batch effects in the raw data  
+```{r}
+# create plotting function
+plot_pre_PCA <- function(results_obj, celltype){
+    
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+
+    # Transform counts for data visualization
+    rld <- rlog(dds, blind=TRUE) # using blind=TRUE means we are looking at the data irrespective of the design
+
+    # Plot PCA before correction
+    cat("plotting PCA")
+    data <- plotPCA(rld, intgroup=c("patient", "tendon_disease", "age", "sex"), returnData = TRUE)
+
+    p1 <- ggplot(data, aes(x=PC1, y=PC2, col=tendon_disease, shape=patient)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for patient & tendon_disease")
+    
+    p2 <- ggplot(data, aes(x=PC1, y=PC2, col=tendon_disease, shape=age)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for sequencing date & tendon_disease")
+    
+    p3 <- ggplot(data, aes(x=PC1, y=PC2, col=tendon_disease, shape=sex)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for sex & tendon_disease")
+    
+    p <- plot_grid(p1, p2, p3)
+    
+}
+```
+
+Plot heatmaps on raw data
+
+```{r}
+# create plotting heatmap function
+plot_pre_heatmap <- function(results_obj, celltype){
+    
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+    
+    print(paste0("Analysing cell type: ", celltype))
+    # plot heatmap not considering the design
+    ntd <- normTransform(dds)
+    select <- order(rowMeans(counts(dds,normalized=TRUE)),
+                    decreasing=TRUE)[1:20]
+    df <- as.data.frame(colData(dds)[,c("tendon_disease", "patient", "age", "sex")])
+    pheatmap(assay(ntd)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+             cluster_cols=TRUE, annotation_col=df,
+             filename = paste0(directory, "/Pre-heatmap/", celltype, ".png"), 
+         width = 6, height = 5)
+
+}
+
+```
+
+## Visualise the results of DEseq2
+
+Volcano plots
+
+```{r}
+plot_volcano_MB <- function(results_obj, celltype){
+    
+    DEseq2_results <- results_obj[[celltype]]
+    
+    p1 <- EnhancedVolcano(DEseq2_results$res_RupturevsHealthy_lfcshrink, 
+                lab = rownames(DEseq2_results$res_RupturevsHealthy_lfcshrink), 
+                x = 'log2FoldChange', 
+                y = 'padj', 
+                title = paste0('Rupture vs Healthy: ', celltype), 
+                pCutoff = 0.05, 
+                FCcutoff = 1.0,
+                pointSize = 0.5, 
+                labSize = 3.0, 
+                max.overlaps = 10,
+                colAlpha = 1,
+                legendPosition = "bottom")
+
+    p
+    ggsave(paste0(directory, "/Volcano_plots/", celltype, "_MB_Volcano_plots.png"), 
+           device = "png", width = 16, height = 7, bg = "white")
+    #return(p)
+}
+
+```
+
+## Post-DEseq2 data QC
+
+Plot PCA after normalisation
+TO DO Add sex 
+```{r}
+
+plot_post_PCA <- function (results_obj, celltype){
+    
+    DEseq2_results <- results_obj[[celltype]]
+    dds <- DEseq2_results[["dds"]]
+    
+
+    
+    # access normalised data
+    vsd <- varianceStabilizingTransformation(dds, blind=FALSE) # have to use this function not vst as <1000 genes
+    mat <- assay(vsd)
+    mm <- model.matrix(~tendon_disease, colData(vsd))
+    mat <- limma::removeBatchEffect(mat, batch=vsd$patient, design=mm)
+    assay(vsd) <- mat
+
+    # Plot PCA before correction
+    data2 <- plotPCA(vsd, intgroup=c("patient", "tendon_disease", "age"), returnData = TRUE)
+    
+    p1 <- ggplot(data2, aes(x=PC1, y=PC2, col=tendon_disease, shape=patient)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for patient & tendon_disease")
+    
+
+    ggsave(paste0(directory, "/Post-PCA/PCA_", celltype, ".png"), width = 12, height = 5 )
+}
+
+plot_post_PCA(DEseq2_results_cells, "Fibroblasts")
+```
+
+Plot heatmap after DEseq2 analysis of the top 20 differentially expressed genes after normalisation
+
+```{r}
+
+plot_post_heatmap <- function (results_obj, celltype){
+    
+    print(paste0("Analysing ", celltype))
+    DEseq2_results <- results_obj[[celltype]]
+    dds <- DEseq2_results[["dds"]]
+    
+    # select genes for heatmap
+    # Using results table which has had log2FC shrinkage
+    res_EnthvsMB <- as.data.frame(DEseq2_results$res_RupturevsHealthy_lfcshrink) %>% 
+        dplyr::filter(padj < 0.05) %>% 
+        arrange(abs(log2FoldChange))%>% 
+        rownames()
+    print(paste0("Rupture vs Healthy: ", length(res_), " genes"))
+
+    
+    # access normalised data
+    vsd <- varianceStabilizingTransformation(dds, blind=FALSE) # have to use this function not vst as <1000 genes
+    rld <- rlog(dds, blind=FALSE)
+    
+        # select data for relevant genes
+    heatmap_df_EnthvsMB <- as.data.frame(assay(vsd)[rownames(assay(vsd)) %in% res_RupturevsHealthy_lfcshrink[1:50], ])
+    heatmap_df_MTJvsMB <- as.data.frame(assay(vsd)[rownames(assay(vsd)) %in% res_RupturevsHealthy_lfcshrink[1:50], ])
+    heatmap_df_musclevsMB <- as.data.frame(assay(vsd)[rownames(assay(vsd)) %in% res_RupturevsHealthy_lfcshrink[1:50], ])
+    
+    # make df of annotation info
+    column_annotation <- as.data.frame(colData(dds)[,c("microanatomical_site", "patient", "sequencing_date")])
+    
+    # plot heatmap if there are >10 significant genes
+    if (length(res_EnthvsMB)>10){
+        pheatmap(heatmap_df_EnthvsMB, cluster_rows = FALSE, scale = "row",
+             annotation_col = column_annotation, show_rownames = FALSE,
+             filename = paste0(directory, "/Post-heatmap/Heatmap_EnthvsMB_", celltype, ".png"), 
+             width = 6, height = 5)    
+    }else{
+        print("EnthvsMB not enough significant genes")
+    }
+    if (length(res_MTJvsMB)>10){
+    pheatmap(heatmap_df_MTJvsMB, cluster_rows = FALSE, scale = "row",
+             annotation_col = column_annotation,show_rownames = FALSE,
+             filename = paste0(directory, "/Post-heatmap/Heatmap_MTJsMB_", celltype, ".png"), 
+             width = 6, height = 5)
+    }else{
+        print("MTJvsMB not enough significant genes")
+    }
+    if (length(res_musclevsMB)>10){
+    pheatmap(heatmap_df_musclevsMB, cluster_rows = FALSE, scale = "row",
+             annotation_col = column_annotation,show_rownames = FALSE,
+             filename = paste0(directory, "/Post-heatmap/Heatmap_musclevsMB_", celltype, ".png"), 
+             width = 6, height = 5)
+    }else{
+        print("musclevsMB not enough significant genes")
+    }
+    
+    
+}
+
+# plot_post_heatmap(DEseq2_results_cells, "LEC")
+```
+
+Run all plotting functions
+```{r}
+plot_list <- list()
+for (i in 1:length(celltypes_list)){
+    plot_list[[i]] <- plot_pre_PCA(DEseq2_results_cells, celltypes_list[[i]])
+    ggsave(plot = plot_list[[i]],
+           file = paste0(directory, "/Pre-PCA/", celltypes_list[[i]], ".png"), 
+           device = "png", width = 12, height = 7, bg = "white")
+    plot_pre_heatmap(DEseq2_results_cells, celltypes_list[[i]])
+    plot_volcano_MB(DEseq2_results_cells, celltypes_list[[i]])
+    plot_post_PCA(DEseq2_results_cells, celltypes_list[[i]])
+}
+
+
+```
+
+
+```{r}
+# run plotting function for all cell types and save plots
+plot_list <- list()
+for (i in 1:length(celltypes_list)){
+    plot_list[[i]] <- plot_pre_PCA(DEseq2_results_cells, celltypes_list[[i]])
+    ggsave(plot = plot_list[[i]],
+           file = paste0(directory, "/Pre-PCA/", celltypes_list[[i]], ".png"), 
+           device = "png", width = 12, height = 7, bg = "white")
+}
+
+
+for (i in 1:length(celltypes_list)){
+    plot_pre_heatmap(DEseq2_results_cells, celltypes_list[[i]])
+}
+
+for (i in 1:length(celltypes_list)){
+    plot_volcano_MB(DEseq2_results_cells, celltypes_list[[i]])
+}
+
+for (i in 1:length(celltypes_list)){
+    plot_post_PCA(DEseq2_results_cells, celltypes_list[[i]])
+}
+
+for (i in 1:length(celltypes_list)){
+    plot_post_heatmap(DEseq2_results_cells, celltypes_list[[i]])
+}
+```
+
+
+#Build table with number of genes upregulated/downregulated according to set filters on lfcshrink data
+```{r}
+
+DEGs.df <- data.frame(col1 = character(), col2 =  numeric(), col3 = numeric(), col4 = numeric())
+
+for(i in 1:length(DEseq2_results_cells)){
+    
+print(names(DEseq2_results_cells[i]))
+
+res_filt = na.omit(DEseq2_results_cells[[i]]$res_RupturevsHealthy_lfcshrink)
+res_filt_upregulated = res_filt[res_filt$padj < 0.05 & res_filt$log2FoldChange > 1 ,]
+res_filt_upregulated <- nrow(res_filt_upregulated)
+
+res_filt_downregulated = res_filt[res_filt$padj < 0.05 & res_filt$log2FoldChange  <   -1 ,]
+res_filt_downregulated <- nrow(res_filt_downregulated)
+
+vec <- c(names(DEseq2_results_cells[i]), res_filt_upregulated, res_filt_downregulated, sum(res_filt_downregulated, res_filt_upregulated))
+print(paste0("Upregulated: ", res_filt_upregulated))
+print(paste0("Downregulated: ", res_filt_downregulated))
+print(paste0("Total DEGs: ", sum(res_filt_downregulated, res_filt_upregulated)))
+
+DEGs.df[i, ] <- vec
+
+}
+
+colnames(DEGs.df) <- c("Cell name", "Upregulated DEGs", "Downregulated DEGs", "Total DEGs")
+DEGs.df
+```
+
+
+#Print volcanoplots for each set of results
+```{r, fig.height=10, fig.width=7}
+
+for(i in 1:length(DEseq2_results_cells)){
+  
+volcanoplot_title <- paste0("Rupture (right) vs Healthy (left): ", names(DEseq2_results_cells[i]))
+
+
+print(EnhancedVolcano(DEseq2_results_cells[[i]]$res_RupturevsHealthy_lfcshrink, 
+                lab = rownames(DEseq2_results_cells[[i]]$res_RupturevsHealthy_lfcshrink), 
+                x = 'log2FoldChange', 
+                y = 'padj', 
+                title = volcanoplot_title,
+                pCutoff = 0.05, 
+                FCcutoff = 1,
+                labSize = 6.0, 
+                colAlpha = 1,
+                legendPosition = "bottom"))
+
+}
+
+
+```
+
+
+#Print volcanoplot for each set of results with set x- and y-axis limits
+```{r, fig.height=10, fig.width=7}
+
+for(i in 1:length(DEseq2_results_cells)){
+  
+volcanoplot_title <- paste0("Rupture (right) vs Healthy (left): ", names(DEseq2_results_cells[i]))
+
+
+print(EnhancedVolcano(DESeq2results_list$Fibroblasts, 
+                lab = DESeq2results_list$Fibroblasts$X, 
+                x = 'log2FoldChange', 
+                y = 'padj', 
+                title = volcanoplot_title,
+                pCutoff = 0.05, 
+                FCcutoff = 1.0,
+                pointSize = 2.0, 
+                xlim = c(-20, 20),
+                ylim = c(0, -log10(10e-21)),
+                labSize = 5.0, 
+                colAlpha = 1,
+                legendPosition = "bottom"))
+}
+
+```
+
+
+#Make matrisome volcano plot
+```{r, fig.height=10, fig.width=8}
+matrisome.complete <- read_csv("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Hs_Matrisome_Masterlist_Naba et al_2012.xlsx - Hs_Matrisome_Masterlist.csv")
+matri.genes <- matrisome.complete$`Gene Symbol`[2:1029]
+core.matri <- matrisome.complete$`Gene Symbol`[2:276]
+assoc.matri <-matrisome.complete$`Gene Symbol`[276:1029]
+collagens <- matrisome.complete$`Gene Symbol`[197:240]
+proteoglycans <- matrisome.complete$`Gene Symbol`[241:276]
+glycoproteinsECM <- matrisome.complete$`Gene Symbol`[2:196]
+
+x <- DESeq2results_list$Fibroblasts
+
+library(org.Hs.eg.db)
+
+volcanoplot_title <- paste0("Rupture (right) vs Healthy (left): ", "Fibroblasts")
+
+
+x$symbol <- mapIds(org.Hs.eg.db, keys = x$X, keytype = "SYMBOL", column = "SYMBOL")
+
+
+x$matrisome <- x$symbol
+x$matrisome[intersect(x$matrisome, collagens)] <- 'Collagens' 
+x$matrisome[intersect(x$matrisome, proteoglycans)] <- 'Proteoglycans' 
+x$matrisome[intersect(x$matrisome, glycoproteinsECM)] <- 'Glycoproteins' 
+x$matrisome[intersect(x$matrisome, assoc.matri)] <- 'Associated matrisome' 
+
+# create custom key-value pairs for different cell-types
+# this can be achieved with nested ifelse statements
+  keyvals.colour <- ifelse(
+    rownames(x) %in% collagens, "#e25822",
+      ifelse(rownames(x) %in% proteoglycans, "#e68fac",
+             ifelse(rownames(x) %in% glycoproteinsECM, "#f3c300",
+                    ifelse(rownames(x) %in% assoc.matri, "#499999",
+        "azure3"))))
+  
+    keyvals.colour[is.na(keyvals.colour)] <- 'azure3'
+ names(keyvals.colour)[keyvals.colour == 'azure3'] <- 'Non-matrisome'
+  names(keyvals.colour)[keyvals.colour == '#e25822'] <- 'Collagens'
+  names(keyvals.colour)[keyvals.colour == '#e68fac'] <- 'Proteoglycans'
+  names(keyvals.colour)[keyvals.colour == '#f3c300'] <- 'Glycoproteins'
+  names(keyvals.colour)[keyvals.colour == '#499999'] <- 'Associated matrisome'
+  
+    keyvals.shape <- ifelse(
+    rownames(x) %in% collagens, 16,
+      ifelse(rownames(x) %in% proteoglycans, 16,
+             ifelse(rownames(x) %in% glycoproteinsECM, 16,
+                    ifelse(rownames(x) %in% assoc.matri, 16,
+        13))))
+  
+ keyvals.shape[is.na(keyvals.shape)] <- 13
+ names(keyvals.shape)[keyvals.shape == 13] <- 'Non-matrisome'
+  names(keyvals.shape)[keyvals.shape == 16] <- 'Matrisome'
+
+ keyvals.size <- ifelse(
+    rownames(x) %in% collagens, 6,
+      ifelse(rownames(x) %in% proteoglycans, 6,
+             ifelse(rownames(x) %in% glycoproteinsECM, 6,
+                    ifelse(rownames(x) %in% assoc.matri, 6,
+        2))))
+
+
+  
+  print(EnhancedVolcano(x,
+    lab = rownames(x),
+    x = 'log2FoldChange',
+    y = 'padj',
+    selectLab = rownames(x)[which(names(keyvals.colour) %in% c('Collagens', 'Proteoglycans', 'Glycoproteins', 'Associated matrisome'))],
+    xlab = bquote(~Log[2]~ 'fold change'),
+    title = volcanoplot_title,
+    pCutoff = 0.05,
+    FCcutoff = 1.0,
+    pointSize = keyvals.size,
+    labSize = 5,
+    colCustom = keyvals.colour,
+    colAlpha = 1,
+    legendLabSize = 12,
+                    xlim = c(-20, 20),
+                ylim = c(0, -log10(10e-21)),
+    max.overlaps = 50,
+    legendPosition = 'bottom',
+    legendIconSize = 5.0))
+  
+```
+
+
+
+#Make Hallmark reference list
+```{r}
+#import Hallmark pathway gene list
+library(msigdbr)
+m_df <- msigdbr(species = "Homo sapiens")
+head(m_df, 2) %>% as.data.frame
+Hallmark_reference <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::select(gs_name, human_gene_symbol)
+Hallmark_reference$gs_name <- gsub("_"," ", Hallmark_reference$gs_name)
+Hallmark_reference$gs_name <- tolower(Hallmark_reference$gs_name)
+Hallmark_reference$gs_name <- gsub("(^|[[:space:]])([[:alpha:]])", "\\1\\U\\2", Hallmark_reference$gs_name, perl=TRUE)
+Hallmark_reference$gs_name <- gsub("Hallmark ","", Hallmark_reference$gs_name)
+
+```
+
+
+#Read in object and make ordered list
+```{r}
+#res <- read.csv("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20240405_11-13_Pseudobulk.dir/DEseq2_results/VEC_RupturevsHealthy.csv")
+
+DESeq2results_list <- list()
+
+filepath <- "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20240405_11-13_Pseudobulk.dir/DEseq2_results/"
+
+# Read in Seurat objects
+file_list <- list()
+file_list <- list.files(filepath, pattern = "_lfcshrink.csv")
+
+for (i in 1:length(file_list)){
+    print(i)
+        DESeq2results_list[[i]] <- read.csv(paste0(filepath, file_list[i]))
+
+}
+
+names_list <- file_list
+names_list <- str_replace_all(names_list, "_RupturevsHealthy_lfcshrink.csv", "")
+
+names(DESeq2results_list) <- names_list
+
+names_list
+
+
+```
+
+```{r}
+
+current_celltype <- names(DESeq2results_list[1])
+
+res.df <- as.data.frame(DESeq2results_list[1])
+res.df <- na.omit(res.df)
+
+colnames(res.df) <- c("X", "baseMean", "log2FoldChange", "lfcSE", "pvalue", "padj")
+res.df$gene_symbol <- res.df$X
+
+res.ordered <- res.df[order(-res.df$log2FoldChange),]
+res.ordered$gene_symbol <- res.ordered$X
+
+head(res.ordered)
+
+#make an named ordered list of L2FC:
+genelist_gsea <- res.ordered[,3]
+## feature 2: named vector
+names(genelist_gsea) <- as.character(res.ordered[,1])
+## feature 3: decreasing order
+genelist_gsea <- sort(genelist_gsea, decreasing = TRUE)
+genelist_gsea <- genelist_gsea[abs(genelist_gsea) > 0.58]
+head(genelist_gsea)
+
+length(genelist_gsea)
+```
+
+
+#Run Enrich and GSEA analyses
+```{r}
+
+Enrich_hallmark_results <- enricher(names(genelist_gsea), TERM2GENE = Hallmark_reference)
+GSEA_hallmark_results <- GSEA(genelist_gsea, TERM2GENE = Hallmark_reference)
+
+head(Enrich_hallmark_results)
+head(GSEA_hallmark_results)
+
+write.csv(GSEA_hallmark_results@result, paste0( "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202404_figures/", current_celltype, "_GSEA_Hallmark_analysis_LFC0.58.csv"))
+
+write.csv(Enrich_hallmark_results, paste0( "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202404_figures/", current_celltype, "_Enrich_Hallmark_analysis_LFC0.58.csv"))
+
+```
+
+
+#All plots for Hallmark analysis
+```{r, fig.width=9, fig.height=12}
+
+GSEA_hallmark_results <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20240415_12-19_Pseudobulk_PathwayAnalysis.dir/VEC_Quads_GSEA_H_results_RupturevsHealthy.RDS")
+
+GSEA_GOBP_results <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20240415_12-19_Pseudobulk_PathwayAnalysis.dir/VEC_Quads_GSEA_GOBP_results_RupturevsHealthy.RDS")
+
+dotplot(GSEA_hallmark_results, 
+        x = "NES",
+        size = "GeneRatio",
+        showCategory = 50)
+
+dotplot(GSEA_GOBP_results, 
+        x = "NES",
+        size = "GeneRatio",
+        showCategory = 50)
+
+heatplot(GSEA_hallmark_results, showCategory = 20, foldChange = genelist_gsea) + coord_flip() + theme(legend.position = "bottom")
+
+heatplot(GSEA_GOBP_results, showCategory = 20, foldChange = genelist_gsea) + coord_flip() + theme(legend.position = "bottom")
+```
+
+#Make cnet plot
+```{r, fig.width=12, fig.height=12}
+p1 <- cnetplot(GSEA_GOBP_results, showCategory = 20, categorySize = "p.adjust", foldChange = genelist_gsea) + theme(legend.position = "bottom")
+p1
+```
+
+##Repeat for each cell type
+

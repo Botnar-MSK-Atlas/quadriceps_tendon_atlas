@@ -1,0 +1,39 @@
+---
+title: "Quads_pro-angiogenic factors"
+author: "Jolet Mimpen"
+date: "2024-06-26"
+output: html_document
+---
+
+```{r setup, load packages, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(tidyverse)
+library(Matrix)
+library(ggplot2)
+library(scales)
+library(RColorBrewer)
+library(harmony)
+library(cowplot)
+library(clustree)
+library(sctransform)
+#library(scCustomize)
+library(scuttle)
+library(celda)
+
+```
+
+
+```{r}
+quads_data_full <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/20240523_quads_overall_reannotated.RDS")
+```
+
+
+```{r, fig.height=12, fig.width=15}
+DotPlot(quads_data_full, features = c("VEGFA", "VEGFB", "VEGFC", "VEGFD", "FGF1", "FGF2", "FGF3", "FGF4", "FGF5", "NRP1", "NRP2", "ANGPT1", "TEK", "TGFB1", "TGFB2", "TGFB3", "PDGFA", "PDGFB", "PDGFC", "PDGFD", "HGF", "TNF", "EGF", "IL1B", "IL6", "IL15", "IL17A", "IL17F", "IL18", "CXCL12", "NOTCH1", "NOTCH2", "DLL4", "PTGS2", "IGF1", "MIF", "CSF2", "CSF3", "CXCL1", "CXCL5", "CXCL6", "CXCL8", "SEMA4D", "SLIT2", "EFNB2", "EPHB4", "MMP9", "HIF1A", "EPAS1"), cols = c("#eb7323", "#4b2480"), split.by = "tendon_disease") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+

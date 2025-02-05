@@ -1,0 +1,348 @@
+---
+title: "202404_quadsdata_endothelial"
+author: "Jolet Mimpen"
+date: "2024-04-05"
+output: html_document
+---
+
+
+
+```{r setup, load packages, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(tidyverse)
+library(Matrix)
+library(ggplot2)
+library(scales)
+library(RColorBrewer)
+library(harmony)
+library(cowplot)
+library(clustree)
+library(sctransform)
+#library(scCustomize)
+library(scuttle)
+library(celda)
+
+```
+
+
+#Data retrieval 
+```{r}
+quads_data <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20231130_quads_int_labelled.RDS")
+
+```
+
+
+#Subset endothelial cells
+```{r, fig.width=12, fig.height=4}
+
+Idents(quads_data) <- quads_data$cluster_id
+
+#Choose one of the two options below:
+quads_endothelial <- subset(quads_data, idents = c("Vascular endothelial cells", "Lymphatic endothelial cells", "Mural cells"))
+
+#Then continue with Seurat/Harmony
+quads_endothelial <- quads_endothelial %>% 
+                Seurat::NormalizeData(verbose = FALSE) %>%
+                FindVariableFeatures(selection.method = "vst", nfeatures = 1000) %>% 
+                ScaleData(verbose=FALSE) %>% 
+                RunPCA(npcs = 50, verbose=FALSE)
+
+quads_endothelial <- RunHarmony(quads_endothelial, group.by.vars = "orig.ident", plot_convergence = TRUE)
+
+ElbowPlot(quads_endothelial, ndims = 50)
+
+
+
+```
+
+
+#Make clustree
+```{r}
+
+library(clustree)
+
+dims.choice <- 30
+resolution.range <- seq(from = 0, to = 1.0, by = 0.1)
+quads_endothelial <- FindNeighbors(quads_endothelial, reduction = "harmony", dims = 1:dims.choice)
+quads_endothelial <- FindClusters(quads_endothelial, resolution = resolution.range)
+
+clustree(quads_endothelial, prefix = "SoupXcounts_snn_res.")
+
+
+```
+
+
+#UMAPs for every resolution
+```{r, fig.width=9, fig.height=5}
+
+quads_endothelial <- RunUMAP(quads_endothelial, reduction = "harmony", dims = 1:dims.choice)
+
+for (i in resolution.range){
+  Idents(quads_endothelial) <- paste0("SoupXcounts_snn_res.", i)
+  print(DimPlot(quads_endothelial, reduction = "umap", label = T) + ggtitle(paste0("Resolution ", i)) + theme(plot.title = element_text(hjust = 0.5)))
+}
+
+```
+
+#Select resolution
+```{r}
+Idents(quads_endothelial) <- "SoupXcounts_snn_res.0.5"
+```
+
+
+#DotPlots with known markers
+```{r, fig.height=4, fig.width=18}
+
+#Idents(quads_endothelial) <- "endothelial_clusterid"
+
+
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "NEGR1", "HMCN1", "DCLK1",
+              "CLU", "COMP",  "CILP", "NOX4", "PRG4",
+              "PTPRC", "CD163", "MRC1", "MSR1", "MERTK", "LYVE1", "CLEC10A",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "TRDN", "TTN", "NEB", "TNNT1", "TNNT3", "PAX7",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "PLIN1", "AQP7", "ADIPOQ", 
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "ASPM", "DIAPH3", "TOP2A",
+              "BCL11A", "CUX2", "CLEC4C",
+              "IBSP", "SP7", "RUNX2",
+               "KIT", "CPA3", "IL18R1",
+              "MMP9", "ACP5", "SIGLEC15",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2")
+
+
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) 
+
+
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "COL3A2",  "DCN", "PRG4",
+              "ABCA8", "COL15A1", "CD55", "DCLK1", "ELN", "FBN1", "FBLN1", "FBLN2", "FBLN5", "KCND2", "NEGR1", "NOVA1", "PDGFRA", "VIT",
+              "CADM1", "COL11A1", "COL11A2", "COL12A1", "COL24A1", "COMP", "CPXM2", "FMOD", "MET", "MKX", "ITGA10", "PIEZO2", "THBS4", "THSD4", "TNMD")
+
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("COL4A1", "COL4A2", "SPARC", "COL15A1", "VWA", "HSPG2", 
+              "CLU", "ACKR1", "CD74", "ADIRF", "HLA-DRA", "TXNIP",
+              "JUNB", "FOS", "ZFP36", "JUN", "SOCS3", "JUND",
+              "CXCL12", "SLC9A3R2", "SRGN", "GJA4", "PODXL", "EFNB2", 
+              "TFPI", "TFF3", "PFIBP1", "EFEMP1", "MMRN", "CCL21") #from Zhang et al. 2023
+
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+
+geneName <- c("PECAM1", "KDR", "CDH5", "FLT1", "TEK", "CLDN5", "VWF", #panEC genes
+              "GJA4", "GJA5", "HEY1", "GATA2", "CXCR4", "SOX17", "MECOM", #artery
+              "ACKR1", "PLVAP", "NR2F2", #vein
+              "ABCG2", "ABCB1") #VESC (all from https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10070846/)
+
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+geneName <- c("FCN3", "EPAS1", "RAMP3", "CDH5", "PODXL", "BTNL9", "NOSTRIN", "FLNB", "CDC42EP1", "CD81", "HPGD", "APP", "EDNRB", "EMCN", "ESAM", "STXBP6", "CLDN5", "CYP3A5", "SOSTDC1", "TBX2", "EPAS1", "SH3BP5", "RALA", "PECAM1", "WWTR1", "GALNT18", "ACVRL1", "SRSF11", "VAT1", "IPO7")
+geneName <- unique(geneName)
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("IFI27", "TM4SF1", "CLEC14A", "CDH5", "PECAM1", "HYAL2", "SPARCL1", "EGFL7", "CLDN5", "AQP1")
+geneName <- c("COL4A1", "COL4A2", "SPARC", "COL15A1", "VWA1", "HSPG2", "PRSS23", "LAMB1", "PLVAP", "APLNR", "IGFBP7", "CLU", "ACKR1", "CD74", "ADIRF", "HLA-DRA", "TXNIP", "JUNB", "FOS", "ZFP36", "JUN", "SOCS3", "JUND", "EIF1", "PPP1R15A", "EGR1", "CXCL12", "SLC9A3R2", "SRGN", "GJA4", "PODXL", "EFNB2", "SRP14", "SEMA3G", "NOTCH4", "HEY1")
+geneName <- unique(geneName)
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+geneName <- c("ACTA2", "TAGLN", "TPM2", "MYH11", "PLN", "SORBS2", "LBH", "IGFBP6", "CNN1", "RERGL", "RAMP1", "RGS5", "APOD", "ABCA9", "STEAP4", "CCL26")
+geneName <- unique(geneName)
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("RGS5", "ABCC9", "GUCY1A2", "EGFLAM", "FRMD3", "DLC1", "AGT", "PDGFRB", "EPS8", "PLA2G5", "MYH11", "ITGA8", "ACTA2", "TAGLN", "CARMN", "KCNAB1", "ZFHX3", "NTRK3", "PRKG1", "RCAN2")
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+geneName <- c("PECAM1", "VWF", "PTPRB", "FLT1", "EMCN", #vascular endothelial cells
+              "NOTCH3", "PDGFRB", "MYO1B",  "DLC1", "CALD1",  "EBF2", #mural
+              "COL6A3", "PDE1C", "COL25A1", "POSTN","STEAP4", "RGS5", #pericytes
+              "SLCO2A1", "SELP", "NOSTRIN", "MYRIP", "GNA14", "TACR1", "RAMP3", "LIFR", "ICAM1", #venular
+              "PODXL", "EFNB2", "NEBL", "SYT1", "THSD4", "ADAMT16", "CXCL12", "SEMA3G", "SLC9A3R2", "GJA4", "HEY1", #arteriolar
+              "COL4A1", "COL4A2",  "COL15A1",  "DYSF",  "ARHGAP18", "LAMB1", "SPARC","GNG2", "VWA1", #capillary
+              "PROX1", "MMRN1",  "TFPI",  "RELN", "PKHD1L1", "SEMA3A", "FLRT2", "CCL21", "LYVE1","STAB2", #lymphatic
+              "MYH11", "RGS6", "TAGLN", "ADGRL3", "SORBS2", "RCAN2", "MYOCD", "LMOD1", "CARMN", #vSMCs
+              "ASPM", "DIAPH3", "TOP2A", "CENPE", "TPX2", "MELK") #dividing
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+
+#Find markers and plot heatmap
+```{r, fig.width=8, fig.height=12}
+quads_endo_markers <- FindAllMarkers(quads_endothelial, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+quads_endo_markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10.quads.endo
+
+DoHeatmap(quads_endothelial, features = top10.quads.endo$gene) + scale_fill_viridis() + NoLegend()
+
+```
+
+
+#DotPlot with top10 DEGs in each cluster
+```{r, fig.width=20, fig.height=5}
+geneName <- top10.quads.endo$gene
+geneName <- unique(geneName)
+
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+DotPlot(quads_endothelial, features = geneName, cols = c("#eb7323", "#4b2480"), assay = "SoupXcounts", split.by = "tendon_disease") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+```
+
+
+
+#Add labels for each cluster of overall object
+```{r, fig.height=4, fig.width=6}
+
+Idents(quads_endothelial) <- "SoupXcounts_snn_res.0.5"
+
+new.cluster.ids <- c("Pericytes", "Venular VECs", "Arteriolar VECs", "Capillary VECs", "Lymphatic ECs", "vSMCs", "Dividing VECs")
+
+
+names(new.cluster.ids) <- levels(quads_endothelial)
+quads_endothelial <- RenameIdents(quads_endothelial, new.cluster.ids)
+
+
+DimPlot(quads_endothelial, reduction = "umap", repel = TRUE, label = F, label.size = 5.0) + NoLegend()
+
+DimPlot(quads_endothelial, reduction = "umap", repel = TRUE, label = TRUE) + NoLegend()
+
+quads_endothelial$endothelial_clusterid <- Idents(quads_endothelial)
+
+```
+
+
+#Plot DotPlot with the new colours
+```{r, fig.width=7, fig.height=5}
+DimPlot(quads_endothelial, reduction = "umap", repel = TRUE, label = F, cols = c("#0041c2", "#f04a00", "#b7410e", "#f89880", "#888888", "#4682b4", "#a1caf1")) + NoLegend()
+
+DimPlot(quads_endothelial, reduction = "umap", repel = TRUE, label = F, cols = c("#0041c2", "#f04a00", "#b7410e", "#f89880", "#888888", "#4682b4", "#a1caf1"), split.by = "tendon_disease") 
+```
+
+
+
+#Plot DotPlot with the new colours
+```{r, fig.width=11, fig.height=5}
+DimPlot(quads_endothelial, reduction = "umap", repel = TRUE, label = TRUE, cols = c("#0041c2", "#f04a00", "#b7410e", "#f89880", "#888888", "#4682b4", "#a1caf1")) + NoLegend()
+
+DimPlot(quads_endothelial, reduction = "umap", repel = TRUE, label = F, cols = c("#0041c2", "#f04a00", "#b7410e", "#f89880", "#888888", "#4682b4", "#a1caf1"), split.by = "tendon_disease") 
+```
+
+#Plot Heatmap with new colours
+```{r, fig.width=6, fig.height=8}
+DoHeatmap(quads_endothelial, features = top10.quads.endo$gene, label = F, group.colors = c("#0041c2", "#f04a00", "#b7410e", "#f89880", "#888888", "#4682b4", "#a1caf1")) + scale_fill_viridis() + NoLegend()
+
+```
+
+#Make DotPlots with named object
+```{r, fig.width=20, fig.height=5}
+geneName <- top10.quads.endo$gene
+geneName <- unique(geneName)
+
+DotPlot(quads_endothelial, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+DotPlot(quads_endothelial, features = geneName, cols = c("#eb7323", "#4b2480"), assay = "SoupXcounts", split.by = "tendon_disease") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+```
+
+#Proportion table
+```{r}
+proptable <- prop.table(table(Idents(quads_endothelial), quads_endothelial$patient), margin = 2)
+proptable
+
+write.table(proptable, file = "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202404_figures/proptable.txt", sep = " ")
+```
+
+
+```{r, fig.width=10, fig.height=6}
+Idents(quads_endothelial) <- quads_endothelial$cluster_id
+
+DimPlot(quads_endothelial)
+
+Idents(quads_endothelial) <- quads_endothelial$endothelial_clusterid
+
+```
+
+
+
+#FindMarkers for each endothelial cell type
+```{r}
+levels(quads_endothelial$endothelial_clusterid)
+
+Pericytes_markers <- FindMarkers(quads_endothelial, ident.1 = "Pericytes", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+VenularVECs_markers <- FindMarkers(quads_endothelial, ident.1 = "Venular VECs", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+ArteriolarVECs_markers <- FindMarkers(quads_endothelial, ident.1 = "Arteriolar VECs", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+CapillaryVECs_markers <- FindMarkers(quads_endothelial, ident.1 = "Capillary VECs", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+LymphaticECs_markers <- FindMarkers(quads_endothelial, ident.1 = "Lymphatic ECs", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+vSMCs_markers <- FindMarkers(quads_endothelial, ident.1 = "vSMCs", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+DividingVECs_markers <- FindMarkers(quads_endothelial, ident.1 = "Dividing VECs", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+Pericytes_markers$geneName <- rownames(Pericytes_markers)
+VenularVECs_markers$geneName <- rownames(VenularVECs_markers)
+ArteriolarVECs_markers$geneName <- rownames(ArteriolarVECs_markers)
+CapillaryVECs_markers$geneName <- rownames(CapillaryVECs_markers)
+LymphaticECs_markers$geneName <- rownames(LymphaticECs_markers)
+vSMCs_markers$geneName <- rownames(vSMCs_markers)
+DividingVECs_markers$geneName <- rownames(DividingVECs_markers)
+
+Endothelial_markers <- list()
+Endothelial_markers[[1]] <- Pericytes_markers
+Endothelial_markers[[2]] <- VenularVECs_markers
+Endothelial_markers[[3]] <- ArteriolarVECs_markers
+Endothelial_markers[[4]] <- CapillaryVECs_markers
+Endothelial_markers[[5]] <- LymphaticECs_markers
+Endothelial_markers[[6]] <- vSMCs_markers
+Endothelial_markers[[7]] <- DividingVECs_markers
+
+names(Endothelial_markers) <- c("Pericytes_markers", "VenularVECs_markers", "ArteriolarVECs_markers", "CapillaryVECs_markers", "LymphaticECs_markers", "vSMCs_markers", "DividingVECs_markers")
+
+```
+
+#Run GO:BP for each endothelial subset
+```{r}
+
+library(gprofiler2)
+
+GOBP_results_endothelial <- list()
+
+for(i in 1:length(Endothelial_markers)){
+    
+    
+set.seed(500)
+topcluster <- Endothelial_markers[[i]] %>% 
+  filter(avg_log2FC > 0.5) %>%
+  top_n(n=100, wt = avg_log2FC)
+gost.res <- gost(topcluster$geneName, organism = "hsapiens", correction_method = "fdr", sources = "GO:BP")
+
+GOBP_results_endothelial[[i]] <- gost.res$result
+    
+
+      
+}
+
+names(GOBP_results_endothelial) <- c("Pericytes_markers", "VenularVECs_markers", "ArteriolarVECs_markers", "CapillaryVECs_markers", "LymphaticECs_markers", "vSMCs_markers", "DividingVECs_markers")
+
+```
+
+
+
+#Save RDS file
+```{r}
+saveRDS(quads_endothelial, file = "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/20240408_quads_endothelial_annotated.RDS")
+
+#if need to re-open quads_endothelial:
+#quads_endothelial <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/20240408_quads_endothelial_annotated.RDS")
+```
+

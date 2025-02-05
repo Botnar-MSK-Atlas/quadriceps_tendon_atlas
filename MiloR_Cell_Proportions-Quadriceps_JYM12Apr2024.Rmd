@@ -1,0 +1,370 @@
+---
+title: "MiloR_Cell_proportions-Quads"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Cell type proportion analysis
+
+Aim: To analyse the how cell proportions vary between healthy and tear in quadriceps tendon
+
+Using MioR as recommended by Bo Sun & Lucy Garner
+
+https://www.nature.com/articles/s41587-021-01033-z  
+https://marionilab.github.io/miloR/articles/milo_demo.html  
+https://www.bioconductor.org/packages/devel/bioc/vignettes/miloR/inst/doc/milo_gastrulation.html  
+https://github.com/MarioniLab/miloR  
+
+## Steps
+
+1. Set up 
+- Set up directories, import yml file, set colours  
+- Read in Seurat object  
+
+2. Set up the milo object & perform initial calculations
+- convert so to sce  
+- create a milo object  
+- construct KNN graph  
+- define representative neighbourhoods & plot  
+- compute neighbourhood connectivity  
+- count number of cells per neighbourhood  
+
+3.  Set up the experimental design for differential abundance testing  
+
+4.  Perform the differential abundance test  
+
+5. Plot the outputs 
+- Inspect the distribution of p values  
+- Volcano plot of test results
+- Neighbourhood graph on Harmony UMAP projection  
+- Beeswarm plot  
+
+
+
+### 1. Set up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(Seurat)
+library(tidyverse)
+library(miloR)
+library(SingleCellExperiment)
+library(scater)
+library(scran)
+library(yaml)
+library(cowplot)
+
+set.seed(1) 
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_MiloR_Cell_Proportions.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/Figures/"))
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+dir.create(paste0(directory, "/Results.dir/"))
+
+# read yaml file
+ini <- read_yaml("miloR.yml")
+
+# colours
+rupture.cols <-  c(Healthy = "#4b2480", Rupture = "#eb7323")
+
+# quads colours
+quads.colours <- c("#e25822",  "#499999", "#f28e2b",  "#4e79a7",  "#f3c300", "#e68fac", "#8db600",  "#888888",  "#a1caf1", "#be0032", "#117733", "#332288", "#A55194", "#661100")
+
+names(quads.colours) <- c("Fibroblasts", "Macrophages", "Vascular endothelial cells",  "Mural cells",  "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Dividing fibroblasts / mural cells", "Dendritic cells", "Osteoblasts", "Granulocytes", "Osteoclasts", "Dividing macrophages")
+```
+
+Print the parameters used
+
+```{r}
+ini
+```
+
+
+
+Read in Seurat object
+
+```{r}
+so.quads <- readRDS("/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20231130_quads_int_labelled.RDS")
+so.quads
+
+```
+
+## 2. Set up the milo object & perform initial calculations  
+Done following the vignette as I have done in the script miloR_vignette (on computer not cluster)
+
+```{r}
+
+# Convert to single cell experiment object  
+sce <- as.SingleCellExperiment(so.quads)
+
+# Create a milo object
+quads_milo <- Milo(sce)
+
+# construct KNN graph
+quads_milo <- buildGraph(quads_milo, k = 30, d = 30, 
+                            reduced.dim = ini$dim_reduction)
+
+# define representative neighbourhoods
+quads_milo <- makeNhoods(quads_milo, 
+                                    prop = 0.1, #if ncells<30k use prop=0.1, otherwise use 0.05
+                                    # in the paper they use 0.3, and have 90k cells
+                            k = 30, d=30, refined = TRUE, reduced_dims = ini$dim_reduction) # paper uses "PCA"
+quads_milo
+```
+
+Plot the distribution of neighbourhood sizes, we are looking for avg neighbourhood size > 5 X N_samples
+Quads data has 6 samples
+5 x 6 = 30
+Maybe need to adjust k and d to increase the neighbourhood sizes. 
+
+```{r}
+plotNhoodSizeHist(quads_milo)
+
+ggsave(paste0(directory, "/Figures/NeighbourhoodSizeHistogram.png"))
+```
+
+Compute neighbourhood connectivity
+(NB this step can take a few minutes i.e. half an hour)
+```{r}
+quads_milo <- calcNhoodDistance(quads_milo, d=30, 
+                                   reduced.dim = ini$dim_reduction)
+```
+
+Count how many cells are in each neighbourhood per sample
+```{r}
+quads_milo <- countCells(quads_milo, 
+                            meta.data = as.data.frame(colData(quads_milo)),
+                            sample="patient")
+head(nhoodCounts(quads_milo))
+```
+
+
+## 3. Set up experimental design for differential abundance testing
+
+
+```{r}
+quads_design <- data.frame(colData(quads_milo))[,c("patient", "tendon_disease")]
+
+## Convert batch info from integer to factor
+#quads_design$patient <- as.factor(quads_design$patient) 
+quads_design <- distinct(quads_design) # keep unique rows
+
+# add rownames (sample names)
+rownames(quads_design) <- quads_design$patient
+
+# make sure the design table is in the same order as the nhoodCounts table
+quads_design <- quads_design[colnames(nhoodCounts(quads_milo)), , drop=FALSE]
+table(quads_design$tendon_disease)# shows how many samples at each microanatomy
+
+quads_design
+```
+
+
+## 4. Perform the differential abundance test  
+We want to test for differences between healthy and disease.  
+Could account for patient here if required  
+
+```{r}
+da_results <- testNhoods(quads_milo, 
+                         design = as.formula(ini$design_formula),
+                         design.df=quads_design, 
+                         fdr.weighting="k-distance", # default
+                         reduced.dim = ini$dim_reduction
+                         )
+
+da_results$Diff <- sign(da_results$logFC) # add a column to show up or down regulation
+da_results$Diff[da_results$SpatialFDR > 0.1] <- 0 # made that column 0 if the result is not significant
+table(da_results$Diff)
+```
+
+This table shows how many nodes show up- and down-regulation  
+
+
+## 5. Plot the outputs
+
+#### Inspect the distribution of p values
+
+```{r}
+ggplot(da_results, aes(PValue)) + geom_histogram(bins=50)
+ggsave(paste0(directory, "/Figures/P-values_distribution.png"))
+```
+
+#### Volcano plot of test results
+[presumably could use EnhancedVolcano here if preferred]
+
+
+```{r, fig.width=6, fig.height=6}
+max.lfc <- max(abs(da_results$logFC))
+
+ggplot(da_results, aes(x=logFC, y=-log10(SpatialFDR), colour=as.character(Diff))) +
+    geom_hline(yintercept=-log10(0.1), lty=2, colour='grey50') +
+    geom_point(size=3) +
+    annotate("text", x=-3, y=3, label="Higher in Healthy", size=4) +
+    annotate("text", x=3, y=3, label="Higher in Rupture", size=4) +
+    scale_x_continuous(limits=c(-max.lfc-0.1, max.lfc+0.1)) +
+    theme_cowplot() +
+    scale_colour_manual(values=c("#4b2480", "grey80", "#eb7323")) +
+    guides(colour="none") +
+    labs(x="log Fold Change", y=expression(paste("-log"[10], " Spatial FDR")))
+
+#ggsave(paste0(directory, "/Figures/Volcano_plot.png"), width = 6, height = 6, bg = "white")
+```
+
+#### Neighbourhood graph on Harmony UMAP projection 
+
+First build the neighbourhood graph, then plot it
+
+
+```{r, warning=FALSE, fig.height=8, fig.width=8}
+quads_milo <- buildNhoodGraph(quads_milo, overlap=5)
+p1 <- plotNhoodGraphDA(quads_milo, layout="UMAP", milo_res=da_results, alpha=0.1) + theme(legend.position = "bottom", legend.box = "vertical")
+p1 
+ggsave(paste0(directory, "/Figures/Neighbourhood_graph_DA.png"), width = 7, height = 6)
+
+```
+
+Do the same plot but colour by original cluster
+
+```{r, fig.width=8, fig.height=8}
+p2 <- plotNhoodGraph(quads_milo, layout="UMAP", colour_by="cluster_id") +    scale_fill_manual(values=quads.colours) +
+    guides(fill=guide_legend(title="Cell type", override.aes=list(size=4), ncol = 3)) + theme(legend.position = "bottom", legend.box = "vertical")
+p2
+ggsave(paste0(directory, "/Figures/Neighbourhood_graph_annotation.png"), width = 9, height = 6)
+
+```
+
+Plot both neighbourhood graphs together
+
+```{r, fig.width=14, fig.height=5}
+
+p <- plot_grid (p1, p2, rel_widths = c(0.45, 0.55))
+p
+
+ggsave(paste0(directory, "/Figures/Neighbourhood_graphs.png"), width = 14, height = 5)
+```
+
+
+
+```{r, fig.width = 10, fig.height=5}
+## Plot single-cell UMAP
+umap_pl <- plotReducedDim(quads_milo, dimred = "UMAP", 
+                          colour_by="tendon_disease", 
+                          text_by = "cluster_id", 
+                          text_size = 3, point_size=0.5) +
+    scale_colour_manual(values = rupture.cols)+
+  guides(fill="none")
+
+## Plot neighbourhood graph
+nh_graph_pl <- plotNhoodGraphDA(quads_milo, da_results,
+                                layout="UMAP",alpha=0.1) 
+  
+p <- plot_grid(umap_pl, nh_graph_pl)
+p
+
+ggsave(paste0(directory, "/Figures/UMAP_vs_Neighbourhood_graph_DA.png"), width = 10, height = 5, bg = "white")
+```
+
+
+#### Annotate neighbourhoods
+
+Annotate the neighbourhoods & plot the homogeneity  
+```{r}
+da_results <- annotateNhoods(quads_milo, da_results, coldata_col = "cluster_id")
+ggplot(da_results, aes(cluster_id_fraction)) + geom_histogram(bins=50)
+ggsave(paste0(directory, "/Figures/Neighbourhood_homogeneity.png"), bg = "white")
+```
+Annotate as "Mixed" if there are a mixture of cell types
+
+```{r}
+da_results$cluster_id <- ifelse(da_results$cluster_id_fraction < 0.7, "Mixed", da_results$cluster_id)
+```
+
+Print the top DA results
+
+```{r}
+print ("Top cell types in Rupture")
+a <- da_results %>% 
+    arrange(abs(SpatialFDR)) %>% 
+    filter(Diff == 1) %>%
+    select(logFC, SpatialFDR, Diff, cluster_id) %>% 
+    head(n=50)
+print(a)
+
+print ("Top cell types in Healthy")
+b <- da_results %>% 
+    arrange(abs(SpatialFDR)) %>% 
+    filter(Diff == -1) %>%
+    select(logFC, SpatialFDR, Diff, cluster_id) %>% 
+    head(n=50)
+print (b)
+
+```
+
+
+#### Beeswarm plot
+
+Visualise the fold changes in different cell types
+
+```{r, fig.height=9, fig.width=10}
+
+da_results_subset <- da_results %>% filter(cluster_id != "Mixed")
+
+plotDAbeeswarm(da_results_subset, group.by = "cluster_id")+
+    scale_colour_gradient2(low = muted("#4b2480"), high = muted("#eb7323")) +
+    theme(axis.title.y=element_blank())
+ggsave(paste0(directory, "/Figures/Beeswarm_plot.png"), width = 10, height = 10, bg = "white")
+
+```
+
+### Volcano plot coloured by cell type
+
+```{r, fig.width=6, fig.height=7.7}
+p3 <- ggplot(da_results, aes(x=logFC, y=-log10(SpatialFDR), colour=cluster_id)) +
+    geom_hline(yintercept=-log10(0.1), lty=2, colour='grey50') +
+    geom_point(size=1.5) +
+    annotate("text", x=-4, y=3, label="Higher in Healthy", size=4) +
+    annotate("text", x=4, y=3, label="Higher in Rupture", size=4) +
+    scale_x_continuous(limits=c(-max.lfc-0.1, max.lfc+0.1)) +
+    theme_cowplot() +
+    scale_colour_manual(values=quads.colours) +
+    labs(x="log Fold Change", y=expression(paste("-log"[10], " Spatial FDR")))  + theme(legend.position = "bottom", legend.box = "vertical")
+
+p3 + guides(col = guide_legend(title="Cell type", ncol = 2))
+
+ggsave(paste0(directory, "/Figures/Volcano_plot_annotated.png"), width = 8, height = 4, bg = "white")
+```
+
+
+#### Save the results  
+
+```{r}
+# save the object
+saveRDS(quads_milo, paste0(directory, "/RDS_objects.dir/Quads-milo.rds"))
+
+# save the results
+write.table(da_results, 
+            file = paste0(directory, "/Results.dir/Quads-milo-DA-results.txt"),
+            sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
+
+
+#If anything needs to be re-run, open files from saved locations:
+```{r}
+quads_milo <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20240411_11-59_MiloR_Cell_Proportions.dir/RDS_objects.dir/Quads-milo.rds")
+da_results <- read.table("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20240411_11-59_MiloR_Cell_Proportions.dir/Results.dir/Quads-milo-DA-results.txt", sep = "\t", header = T)
+```
+
+
+Print session info
+
+```{r}
+sessionInfo()
+```
+

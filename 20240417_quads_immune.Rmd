@@ -1,0 +1,501 @@
+---
+title: "20240415_quads_immune"
+author: "Jolet Mimpen"
+date: "2024-04-15"
+output: html_document
+---
+
+
+
+```{r setup, load packages, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(tidyverse)
+library(Matrix)
+library(ggplot2)
+library(scales)
+library(RColorBrewer)
+library(harmony)
+library(cowplot)
+library(clustree)
+library(sctransform)
+#library(scCustomize)
+library(scuttle)
+library(celda)
+
+```
+
+
+#Data retrieval 
+```{r}
+quads_data <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20231130_quads_int_labelled.RDS")
+```
+
+
+#Subset immune cells
+```{r, fig.width=12, fig.height=4}
+
+Idents(quads_data) <- quads_data$cluster_id
+
+#Choose one of the two options below:
+quads_immune <- subset(quads_data, idents = c("Macrophages", "Dividing macrophages", "T cells", "Granulocytes", "Dendritic cells", "Osteoclasts"))
+
+#Then continue with Seurat/Harmony
+quads_immune <- quads_immune %>% 
+                Seurat::NormalizeData(verbose = FALSE) %>%
+                FindVariableFeatures(selection.method = "vst", nfeatures = 1500) %>% 
+                ScaleData(verbose=FALSE) %>% 
+                RunPCA(npcs = 50, verbose=FALSE)
+
+quads_immune <- RunHarmony(quads_immune, group.by.vars = "orig.ident", plot_convergence = TRUE)
+
+ElbowPlot(quads_immune, ndims = 50)
+ElbowPlot(quads_immune, ndims = 50, reduction = "harmony")
+
+
+
+
+```
+
+
+#Make clustree
+```{r, fig.width=8, fig.height=8}
+
+library(clustree)
+
+dims.choice <- 20
+resolution.range <- seq(from = 0, to = 2.0, by = 0.1)
+quads_immune <- FindNeighbors(quads_immune, reduction = "harmony", dims = 1:dims.choice)
+quads_immune <- FindClusters(quads_immune, resolution = resolution.range)
+
+clustree(quads_immune, prefix = "SoupXcounts_snn_res.")
+
+
+```
+
+
+#UMAPs for every resolution
+```{r, fig.width=9, fig.height=5}
+
+quads_immune <- RunUMAP(quads_immune, reduction = "harmony", dims = 1:dims.choice)
+
+for (i in resolution.range){
+  Idents(quads_immune) <- paste0("SoupXcounts_snn_res.", i)
+  print(DimPlot(quads_immune, reduction = "umap", label = T) + ggtitle(paste0("Resolution ", i)) + theme(plot.title = element_text(hjust = 0.5)))
+}
+
+```
+
+
+
+#Select resolution
+```{r, fig.width=9, fig.height=5}
+
+Idents(quads_immune) <- "SoupXcounts_snn_res.1.1"
+
+DimPlot(quads_immune, reduction = "umap", repel = TRUE)
+
+```
+
+
+#Plot UMAP split by tendon_disease
+```{r, fig.width=16, fig.height=5}
+
+
+DimPlot(quads_immune, reduction = "umap", repel = TRUE, split.by = "tendon_disease", label = T)
+DimPlot(quads_immune, reduction = "umap", repel = TRUE, split.by = "tendon_disease", label = F)
+```
+
+
+
+#DotPlots with known markers
+```{r, fig.height=5, fig.width=20}
+
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "NEGR1", "HMCN1", "DCLK1",
+              "CLU", "COMP",  "CILP", "NOX4", "PRG4",
+              "PTPRC", "CD163", "MRC1", "MSR1", "MERTK", "LYVE1", "CLEC10A",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "TRDN", "TTN", "NEB", "TNNT1", "TNNT3", "PAX7",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "PLIN1", "AQP7", "ADIPOQ", 
+              "CD247", "SKAP1", "THEMIS", "CCL5", "NKG7",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "ASPM", "DIAPH3", "TOP2A",
+              "BCL11A", "CUX2", "CLEC4C",
+              "IBSP", "SP7", "RUNX2",
+               "KIT", "CPA3", "IL18R1",
+              "MMP9", "ACP5", "SIGLEC15",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2")
+
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) 
+
+
+
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN", "PRG4", "CLIC5", "FAP", "THY1", "PDPN", "POSTN", "CADM1", "COL11A1", "HLA-DRA", "CDH11", "PIEZO2", "COL12A1", "MFAP5", "LAMA2", "NEGR1",
+              "PECAM1", "PTPRB", "FLT1", "VWF", "VEGFC",
+              "NOTCH3", "PDGFRB", "MYO1B", "MMRN1", "PROX1", "KDR", "FLT4", 
+              "GPAM", "AQP7", "ADIPOQ", 
+              "PTPRC", "CD247", 
+              "CD69", "KIT", "CDK15",
+              "MS4A1", "CD37", "BLNK", "SDC1", "CD38", "IGHA1",
+              "CD14", "CD48", "CD163", "MERTK", "MRC1", "TREM2", "FOLR2", "LYVE1", "ID2", "ICAM1", "TIMD4", "C1QB", "APOE", "FCN1", "CLEC10A", "COTL1",
+              "ASPM", "DIAPH3",
+              "IRF7", "CLEC4C", "IL3RA", "HLA-DQA1",
+              "TLR2", "GNA01", "XCR1", "LRRC18", "PKP2", "FN1", "CLCN4", "ZNF462", "SLC30A4", "LDLRAD3", "FFAR4")
+
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+
+geneName <- c("CD163", "FCGR2A", "CD14", "FCGR1A", "CXCL2", "CXCL3", "S100A8", "VCAN", "CLEC5A", "CD68", "FCGR3A", "FN1", "ITGAM", "MARCO", "VSIG4", "C1QA", "RNASE1", "APOE", "SCARB2", "MMP2", "IFI27", "NUPR1", "HTRA1", "TIMD4", "FERMT2", "F13A1", "SLCO2B1", "STAB1", "MERTK", "CCL18", "FOLR2", "COLEC12", "CCL13", "SELENOP", "SLC40A1", "LYVE1", "THBD", "SPP1", "FABP5", "CCR2", "CD36", "RGS2", "PID1", "FCN1", "S100A12", "CEBPA", "IFITM3", "ITGAX", "PLAUR", "IL1B", "PELATON", "CX3CR1", "HES4", "CDKN1C", "TCF7L2", "IER3", "ATF3", "HBEGF", "EREG", "EGR1", "IER5L", "TNF", "PLCG2", "HLA-DRA", "CLEC10A", "FCER1A", "IL1R2", "CD1C", "LAP3", "TBX21", "CXCL9", "GBP1", "CXCL11", "CXCL10", "IFIT3", "IFIT1", "STAT1", "CCL8", "JAK1", "PLAC8", "TCF4", "CLEC4C", "PTGDS", "GZMB", "FLT3", "CST7", "CAMP", "XCR1", "CLEC9A", "G0S2", "CXCL13", "CCL17", "FSCN1", "EBI3", "LAMP3", "CCL19", "CCR7", "KIT", "CDK15") #DC markers from Zhang et al 2023 (RA AMP2)
+
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+
+geneName <- c("C1orf54", "WDFY4", "CPNE3", "SNX3", "CLEC9A", "RGS10", "HLA-DPB1", "CLEC10A", "HLA-DPA1", "RPS2", "RPS18", "RPL10", "RPL18A", "LYZ", "HLA-DMA", "HLA-DRA", "HLA-DMB", "TCF4", "CCDC50", "PLAC8", "IRF7", "JCHAIN", "ITM2C", "PLD4", "GZMB", "BCL11A", "LILRA4", "LST1", "COTL1", "IFITM2", "CD48", "TCF7L2", "SMIM25", "RPS19", "LYST", "FCN1", "FCGR3A", "FCGR3B")
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+
+
+geneName <- c("IRF7", "IRF8", "IRF4", "ID2", "BATF3", "ZEB1", "ZEB2", "KLF4", "RUNX3", "MAFB", "CLEC9A", "CADM1", "XCR1", "BTLA", "DPP4", "CD226", "FCER1A", "SIRPA", "LILRA2", "CLEC4A", "CLEC10A", "LAMP3", "CX3CR1", "ITGAM", "ITGAX", "CD1C", "SECISBP2L", "TLR2", "TLR4", "TLR7", "TLR9", "THBD")
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+
+
+geneName <- c("CD14", "MERTK",
+              "FN1", "FTL", "CTSD", "APOE", "PLEC", 
+              "TIMD4", "CD163", "TREM2", "C1QB",
+              "KLF2", "ID2", "HSPA1A", "EGR1", "CCL2",
+              "LYVE1", "SEPP1", "STAB1", "FOLR2",
+              "CLEC10A", "GPR183", "HLA-DPB1", "CD1C", "CXCR4",
+              "S100A12", "S100A9", "S100A8", "FCN1", "CD48",
+              "SPP1", "FABP5", "CD9", "MT2A", "LDHA",
+              "ISG15", "GBP1", "IFI6", "LY6E", "STAT1",
+              "TNF", "CCL4", "CCL3", "ICAM1", "NFKBIA")
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+
+
+#FeaturePlots
+```{r, fig.width=12, fig.height=20}
+FeaturePlot(quads_immune, features = c("MRC1", "FCER1A", "CLEC10A", "CD1C", "VCAN", "LYZ", "CLEC9A", "CADM1", "FTL", "FCGR3A", "GRZMB", "IGJ"), ncol = 2)
+FeaturePlot(quads_immune, features = c("MRC1", "LYVE1", "MARCO", "MERTK", "CD163", "CD14", "PTPRG", "CADM1", "FTL", "FCGR3A", "GRZMB", "IGJ"), ncol = 2)
+```
+
+
+
+#New/more lists to check known markers
+```{r, fig.width=10}
+geneName <- c("MPZ", "MBP", "LPL", "CLU", "L1CAM", "MS4A2", "TPSB2", "PRG2", "EPX", "SORL1", "CSF3R", "FCGR3A", "FCGR3B","IL7R", "CD3D", "NKG7",  "PRF1", "MSLN", "ITLN1", "NGFR", "SLC22A3", "ITGA6", "CD160", "XCL1", "XCL2", "NCAM1", "FCGR3A", "GZMB", "GNLY", "CD3E", "CD3G", "SELL", "CCR7", "CD4", "CD40LG", "FOXP3")
+geneName <- unique(geneName)
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+geneName <- c("MERTK", "CD163", "CD300H", "PPM1N", "HMOX1", "SIDT2", "FCGR3A", "INSIG1", "ACP2", "NAAA", "POFUT1", "TESC", "AP2A1", "EPS8", "RHOC", "UTRN", "CYP1B1", "C1QC", "C1QB", "C1QA", "PPM1N", "CD74")
+geneName <- unique(geneName)
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("CD74", "HLA-DQB1", "HLA-DPB1", "HLA-DPA1", "HLA-DQA1", "HLA-DRA", "HLA-DRB1", "TYROBP", "FCER1G", "HLA-DMA") #dendritic cells cellXgene
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("NKG7", "GNLY", "CST7", "CSTW", "GZMA", "PRF1", "TYROBP", "KLRD1", "CD7", "CD247", "RUNX3", "KLRC1", "CMC1", "EOMES", "HOPX", "KLRB1", "CCL5", "FGFBP2", "HCST", "GZMM", "ITGB2", "FCGR3A", "IFITM1", "GZMH", "KLRF1") #NK cells cellXgene
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("S100A8", "S100A9", "TYROBP", "CSF3R", "NAMPT", "MNDA", "SRGN", "FPR1", "GCA", "IFITM2", "FCER1G", "CTSS", "FCGR3B", "LITAF", "ALOX5AP", "NCF2", "C5AR1", "SPI1", "LCP1", "BASP1") #neutrophil markers
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("HLA-DRA", "CD14", "VCAN", "S100A8", "S100A12", "LILRA5", "LILRB2", "S100A6", "S100A4", "CD68", "FCN1", "HLA-DRB1", "LYVE1", "F13A1", "APOE", "APOC1", "FABP5", "SPP1", "TREM2", "CLEC9A", "FCER1A", "CLEC10A", "CD1C", "CLEC4C", "CD24", "AZU1", "MPO", "ELANE", "LTF", "LCN2", "CAMP", "FCGR3B", "CSF3R", "EPX", "CLC", "PRG2", "HDC", "TPSAB1", "TPSB2", "MS4A2") #myeloid markers from muscle aging paper April 2024
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("CLEC9A", "C1ORF54", "HLA-DPA1", "CADM1", "CAMK2D", "IDO1", "CLNK", "ZNF366", "NDRG2", "XCR1", "SLAMF8", "CD59") #DC1 from Villani et al Science 2017
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("LYPD2","FOLR3","CLEC4E","LILRA1","CDA","RBP7","CD300LF","FPR1","CD93","MTMR11","VMO1","TPPP3","C1QA","C5AR1","CD300E","GPBAR1","HES4") #monocyte markers
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+geneName <- c("HEXB", "CST3", "P2RY12", "CX3CR1", "CD9", "CTSD", "CST7", "LPL")
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+```
+
+
+
+
+#Find markers and plot heatmap
+```{r, fig.width=8, fig.height=15}
+#Idents(quads_immune) <- "SoupXcounts_snn_res.1"
+
+quads_immune_markers <- FindAllMarkers(quads_immune, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+quads_immune_markers %>%
+    group_by(cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) -> top5.quads.immune
+
+DoHeatmap(quads_immune, features = top5.quads.immune$gene) + scale_fill_viridis() + NoLegend()
+
+
+quads_immune_markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10.quads.immune
+
+DoHeatmap(quads_immune, features = top10.quads.immune$gene, label = F) + scale_fill_viridis() + NoLegend()
+
+
+quads_immune_markers %>%
+    group_by(cluster) %>%
+    top_n(n = 25, wt = avg_log2FC) -> top25.quads.immune
+
+DoHeatmap(quads_immune, features = top25.quads.immune$gene) + scale_fill_viridis() + NoLegend()
+
+```
+
+
+
+#DotPlot with DEGs in each cluster
+```{r, fig.width=30, fig.height=5}
+geneName <- top5.quads.immune$gene
+geneName <- unique(geneName)
+
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+geneName <- top10.quads.immune$gene
+geneName <- unique(geneName)
+
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+#FeaturePlot to check markers
+```{r, fig.height=15, fig.width=12}
+FeaturePlot(quads_immune, features = c("LYVE1", "SELENOP", "FOLR2", "F13A1", "NUPR1", "MARCO"), ncol = 2)
+```
+
+
+#Add labels for each cluster of overall object
+```{r, fig.height=6, fig.width=10}
+
+Idents(quads_immune) <- "SoupXcounts_snn_res.1.1"
+
+
+new.cluster.ids <- c("MERTKhi LYVE1hi macrophages", "T cells", "MERTKhi LYVE1hi macrophages", "MERTKhi LYVE1hi macrophages", "MERTKhi LYVE1lo macrophages", "MERTKhi LYVE1lo macrophages", "VCANhi DCs/Mono", "MERTKhi LYVE1lo macrophages", "CLEC10Ahi DCs", "NK cells", "MERTKlo PTPRGhi macrophages", "Dividing immune cells", "pDCs", "MERTKlo PTPRGhi macrophages", "Granulocytes", "Osteoclasts", "MERTKhi LYVE1lo macrophages", "B cells", "CLEC9Ahi DCs") #for res 1.1
+
+
+names(new.cluster.ids) <- levels(quads_immune)
+quads_immune <- RenameIdents(quads_immune, new.cluster.ids)
+
+
+DimPlot(quads_immune, reduction = "umap", repel = TRUE, label = F, label.size = 5.0) + NoLegend()
+
+DimPlot(quads_immune, reduction = "umap", repel = TRUE, label = TRUE) + NoLegend()
+
+quads_immune$immune_clusterid <- Idents(quads_immune)
+
+```
+
+#Plot DotPlot with the new colours
+```{r, fig.width=8, fig.height=5}
+DimPlot(quads_immune, reduction = "umap", repel = TRUE, label = TRUE, cols = c("#8bc9c9", #MERTKhi LYVE1hi macrophages
+                                                                               "#e37197", #T cells
+                                                                               "#379975", #MERTKhi LYVE1lo macrophages
+                                                                               "#eb0e45", #VCANhi DCs/Mono
+                                                                               "#702438", #CLEC10Ahi DCs
+                                                                               "#f0b1d0", #NK cells
+                                                                               "#4682b4", #MERTKlo PTPRGhi macrophages
+                                                                               "#a1caf1", #Dividing immune cells
+                                                                               "#be0032", #pDCs
+                                                                               "#0a2f8c", #Granulocytes
+                                                                               "#332288", #Osteoblasts
+                                                                               "#f23f90", #B cells
+                                                                               "#cf47ed" #CLEC9hi DCs
+                                                                               )) + NoLegend()
+
+
+DimPlot(quads_immune, reduction = "umap", repel = TRUE, label = F, cols = c("#8bc9c9", #MERTKhi LYVE1hi macrophages
+                                                                               "#e37197", #T cells
+                                                                               "#379975", #MERTKhi LYVE1lo macrophages
+                                                                               "#eb0e45", #VCANhi DCs/Mono
+                                                                               "#702438", #CLEC10Ahi DCs
+                                                                               "#f0b1d0", #NK cells
+                                                                               "#4682b4", #MERTKlo PTPRGhi macrophages
+                                                                               "#a1caf1", #Dividing immune cells
+                                                                               "#be0032", #pDCs
+                                                                               "#0a2f8c", #Granulocytes
+                                                                               "#332288", #Osteoblasts
+                                                                               "#f23f90", #B cells
+                                                                               "#cf47ed" #CLEC9hi DCs
+                                                                               )) + NoLegend()
+
+
+
+```
+
+
+#Plot DotPlot with the new colours
+```{r, fig.width=10, fig.height=5}
+DimPlot(quads_immune, reduction = "umap", repel = TRUE, label = F, cols = c("#8bc9c9", #MERTKhi LYVE1hi macrophages
+                                                                               "#e37197", #T cells
+                                                                               "#379975", #MERTKhi LYVE1lo macrophages
+                                                                               "#eb0e45", #VCANhi DCs/Mono
+                                                                               "#702438", #CLEC10Ahi DCs
+                                                                               "#f0b1d0", #NK cells
+                                                                               "#4682b4", #MERTKlo PTPRGhi macrophages
+                                                                               "#a1caf1", #Dividing immune cells
+                                                                               "#be0032", #pDCs
+                                                                               "#0a2f8c", #Granulocytes
+                                                                               "#332288", #Osteoblasts
+                                                                               "#f23f90", #B cells
+                                                                               "#cf47ed" #CLEC9hi DCs
+                                                                               ), split.by = "tendon_disease")
+
+```
+
+
+#Plot DotPlot with the new colours
+```{r, fig.width=10, fig.height=5}
+DimPlot(quads_immune, reduction = "umap", repel = TRUE, label = F, cols = c("#8bc9c9", #MERTKhi LYVE1hi macrophages
+                                                                               "#e37197", #T cells
+                                                                               "#379975", #MERTKhi LYVE1lo macrophages
+                                                                               "#eb0e45", #VCANhi DCs/Mono
+                                                                               "#702438", #CLEC10Ahi DCs
+                                                                               "#f0b1d0", #NK cells
+                                                                               "#4682b4", #MERTKlo PTPRGhi macrophages
+                                                                               "#a1caf1", #Dividing immune cells
+                                                                               "#be0032", #pDCs
+                                                                               "#0a2f8c", #Granulocytes
+                                                                               "#332288", #Osteoblasts
+                                                                               "#f23f90", #B cells
+                                                                               "#cf47ed" #CLEC9hi DCs
+                                                                               ), split.by = "patient",
+        ncol = 3)
+
+```
+
+
+#Plot UMAP split by tendon_disease with new colours
+```{r, fig.width=8, fig.height=5.5}
+DimPlot(quads_immune, reduction = "umap", group.by = "tendon_disease", cols = c("#eb7323", "#4b2480")) + NoLegend()
+```
+
+
+#Plot Dotplot with about 5 markers for each cell type
+```{r}
+
+geneName <- c("CD14", "CD163", "F13A1", "STAB1", "MERTK", "MRC1", "TLR2", "FGF13",  "SELENOP", "PDE4D", "NAV2", "ABCA6", "LYVE1", "MARCO", 
+              "CD247", "SKAP1", "IL7R", "THEMIS", "ANK3",
+              "CTSL", "CTSB", "TPRG1", "HMOX1", "ELL2",
+              "CXCL2", "CXCL3", "CXCL8",
+              "VCAN", "FCN1", "LYZ",
+              "HLA-DPB1", "HLA-DPA1", "HLA-DQA1", "HLA-DRA", "HLA-DRB1",
+              "CLEC10A", "CD1C", "FCER1A", "IL1R2",
+              "NCAM1", "GNLY", "KLRD1", "CCL5", "MCTP2",
+              "PTPRG", "MIR99AHG", "PARD3", "KAZN",  "IFI44L",
+              "ASPM", "DIAPH3", "TOP2A", "RRM2", "CENPE",
+              "CLEC4C", "BCL11A", "CUX2", "IRF8", "PLAC8",
+               "KIT", "CPA3", "IL18R1", "MS4A2", "GATA2",
+              "SPP1", "MMP9", "ACP5", "SIGLEC15", "AK5",
+              "MS4A1", "CD37", "BLK", "FCRL1", "IGHM",
+              "CLEC9A", "CADM1", "IDO1", "CLNK", "ZNF366")
+DotPlot(quads_immune, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) 
+
+
+```
+
+
+#Heatmap with gene list per cell type
+```{r, fig.width=5, fig.height=13}
+library(pheatmap)
+library(magrittr)
+library(ArchR)
+library(grid)
+library(Seurat)
+
+geneName <- c("CD14", "CD163", "F13A1", "STAB1", "MERTK", "MRC1", "TLR2", "FGF13",  "SELENOP", "PDE4D", "NAV2", "ABCA6", "LYVE1", "MARCO", 
+              "CD247", "SKAP1", "IL7R", "THEMIS", "ANK3",
+              "CTSL", "CTSB", "TPRG1", "HMOX1", "ELL2",
+              "CXCL2", "CXCL3", "CXCL8",
+              "VCAN", "FCN1", "LYZ",
+              "HLA-DPB1", "HLA-DPA1", "HLA-DQA1", "HLA-DRA", "HLA-DRB1",
+              "CLEC10A", "CD1C", "FCER1A", "IL1R2",
+              "NCAM1", "GNLY", "KLRD1", "CCL5", "MCTP2",
+              "PTPRG", "MIR99AHG", "PARD3", "KAZN",  "IFI44L",
+              "ASPM", "DIAPH3", "TOP2A", "RRM2", "CENPE",
+              "CLEC4C", "BCL11A", "CUX2", "IRF8", "PLAC8",
+               "KIT", "CPA3", "IL18R1", "MS4A2", "GATA2",
+              "SPP1", "MMP9", "ACP5", "SIGLEC15", "AK5",
+              "MS4A1", "CD37", "BLK", "FCRL1", "IGHM",
+              "CLEC9A", "CADM1", "IDO1", "CLNK", "ZNF366")
+
+
+
+
+genes <- intersect(geneName, rownames(GetAssayData(quads_immune, slot = 'data')))
+mat <- AverageExpression(quads_immune, features = genes, slot = 'data')
+
+mat1 <- t(scale(t(mat$SoupXcounts)))
+
+mat1 <- na.omit(mat1)
+
+#select which clusters you want to show using the following function; if you want to show all clusters, use mat1
+#mat2 <- subset(mat1, select = c("Fast-twitch skeletal muscle cells", "Slow-twitch skeletal muscle cells", "Transitional skeletal muscle cells"))
+#mat2 <- subset(mat1, select = c("0", "3", "4"))
+
+
+pheatmap(mat1,
+         na_col = "black",
+         cluster_rows = F,
+         color = viridis(n = 256, alpha = 1, 
+                                   begin = 0, end = 1, option = "viridis"))
+
+pheatmap(mat1,
+         na_col = "black",
+         cluster_rows = T,
+         color = viridis(n = 256, alpha = 1, 
+                                   begin = 0, end = 1, option = "viridis"))
+
+pheatmap(mat1,
+         na_col = "black",
+         color = myColor,
+         cluster_rows = F)
+
+#plot5 <- DoHeatmap(data.integrated.labelled, features = EnsName, size = 3, draw.lines = TRUE)
+
+#plot5 + scale_x_discrete(breaks=geneName$EnsName, labels=geneName$geneName) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+
+#Plot correlation plot (SCPubr)
+```{r, fig.width=8, fig.height=8}
+correlationplot <- SCpubr::do_CorrelationPlot(sample = quads_immune)
+correlationplot
+```
+
+
+
+#Proportion table
+```{r}
+proptable <- prop.table(table(Idents(quads_immune), quads_immune$patient), margin = 2)
+proptable
+
+write.table(proptable, file = "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/202404_figures/proptable_immune_2.txt", sep = " ")
+```
+
+
+#Save RDS file
+```{r}
+saveRDS(quads_immune_1, file = "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/20240524_quads_immune_reannotated.RDS")
+
+quads_immune <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Quads_analysis_RDS/20240524_quads_immune_reannotated.RDS")
+```
+

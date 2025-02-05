@@ -1,0 +1,143 @@
+---
+title: "Pseudobulk_DE_Quads_overall"
+author: "Jolet Mimpen"
+date: "2025-02-03"
+output: html_document
+---
+
+
+## Load libraries and other required files
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+library(tidyverse)
+library(DESeq2)
+library(DEGreport)
+library(EnhancedVolcano)
+library(gprofiler2)
+library(dplyr)
+library(sf)
+library(raster)
+library(dplyr)
+library(stringr)
+library(tidyr)   
+
+```
+
+
+#Data retrieval 
+
+```{r}
+quads_data <- readRDS("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20231130_quads_int_labelled.RDS")
+```
+
+#Pseudobulk and DE analysis: hamstring vs Achilles overall
+```{r, fig.width=12, fig.height=5}
+# visualise 
+cell_plot <- DimPlot(quads_data, reduction = 'umap', group.by = 'tendon_disease', label = TRUE)
+cond_plot <- DimPlot(quads_data, reduction = 'umap', group.by = 'patient')
+cell_plot|cond_plot
+
+# pseudo-bulk workflow -----------------------------------------------------------------------------
+
+# 1. counts matrix - sample level
+
+#New column in metadata: clusters and orig.ident combined
+quads_data$samples <- paste0(quads_data$cluster_id, quads_data$patient)
+
+#Aggregation of counts to sample level
+cts <- AggregateExpression(quads_data, 
+                    group.by = c("tendon_disease", "patient"),
+                    assays = 'SoupXcounts',
+                    slot = "counts",
+                    return.seurat = FALSE)
+
+cts <- cts$SoupXcounts
+
+# transpose
+cts.t <- t(cts)
+
+# convert to data.frame
+cts.t <- as.data.frame(cts.t)
+
+# get values where to split
+splitRows <- gsub('_.*', '', rownames(cts.t))
+
+# split data.frame
+cts.split <- split.data.frame(cts.t,
+                 f = factor(splitRows), 
+                 drop = TRUE)
+
+# 2. generate sample level metadata
+cts.df <- cts
+cts.df <- as.data.frame(cts)
+colData <- data.frame(samples = colnames(cts.df))
+
+colData <- colData %>%
+  mutate(condition = ifelse(grepl(pattern = "rupture", samples, ignore.case = T), "Rupture", "Healthy")) %>% 
+  column_to_rownames(var = 'samples')
+
+# perform DESeq2 --------
+# Create DESeq2 object   
+dds <- DESeqDataSetFromMatrix(countData = round(cts.df),
+                       colData = colData,
+                       design = ~ condition) 
+
+# filter (keep the genes that have a minimum of 10 reads)
+keep <- rowSums(counts(dds)) >=10
+dds <- dds[keep,]
+
+# run DESeq2
+dds <- DESeq(dds)
+
+# Check the coefficients for the comparison
+resultsNames(dds)
+
+# Generate results object
+res <- results(dds, name = "condition_Rupture_vs_Healthy")
+res_shrink <- lfcShrink(dds, coef = "condition_Rupture_vs_Healthy", type = "apeglm")
+res
+res_shrink
+
+write.csv(res, "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20240405_11-13_Pseudobulk.dir/DEseq2_results/Allcelltypes_RupturevsHealthy.csv")
+write.csv(res_shrink, "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20240405_11-13_Pseudobulk.dir/DEseq2_results/Allcelltypes_RupturevsHealthy_lfcshrink.csv")
+
+
+```
+
+
+#Calculate number of DEGs
+```{r}
+res_filt = na.omit(res_shrink)
+res_filt_upregulated = res_filt[res_filt$padj < 0.05 & res_filt$log2FoldChange > 1 ,]
+res_filt_upregulated <- nrow(res_filt_upregulated)
+
+res_filt_downregulated = res_filt[res_filt$padj < 0.05 & res_filt$log2FoldChange  <   -1 ,]
+res_filt_downregulated <- nrow(res_filt_downregulated)
+
+print(paste0("Upregulated: ", res_filt_upregulated))
+print(paste0("Downregulated: ", res_filt_downregulated))
+print(paste0("Total: ", sum(res_filt_downregulated, res_filt_upregulated)))
+
+#write.csv(res, paste0(directory, "/DEseq2_results/Allcells_RupturevsHealthy.csv"))
+```
+
+
+#Volcano plot for DE analysis: Rupture vs Healthy overall
+```{r, fig.height=11, fig.width=8}
+#padj = p adjusted value 
+EnhancedVolcano(res_shrink, 
+                lab = rownames(res_shrink), 
+                x = 'log2FoldChange', 
+                y = 'padj', 
+                title = 'Rupture  (right) vs Healthy (left): overall', 
+                pCutoff = 0.05, 
+                FCcutoff = 1.0,
+                xlim = c(-21, 21),
+                ylim = c(0, -log10(10e-26)),
+                pointSize = 2.0, 
+                labSize = 6.0, 
+                colAlpha = 1,
+                legendPosition = "bottom")
+```
+
