@@ -4,7 +4,10 @@ Sarah J.B. Snelling
   
 https://doi.org/10.1101/2024.09.06.611599
 
-Code by Jolet Mimpen and [Carla Cohen](https://github.com/carlacohen)
+The full dataset can be explored on Cellxgene and downloaded from the HCA data portal  
+TO DO Add links once live  
+
+Code by [Jolet Mimpen](https://orcid.org/0000-0003-4464-242X) and [Carla Cohen](https://github.com/carlacohen)
 
 The following scripts were used to analyse single nucleus RNA-seq data from human healthy and ruptured quadriceps tendon.  
 
