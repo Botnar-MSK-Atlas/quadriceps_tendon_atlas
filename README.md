@@ -16,7 +16,7 @@ The following scripts were used to analyse single nucleus RNA-seq data from huma
 | ----- | ------ | ------- |
 | 1 | QC-filter-quadriceps.Rmd | Initial QC and filtering on a per sample basis |
 | 2 | Ambient-doublet-quadriceps.Rmd | Calculate decontX score and doublet score, filter out cells with high decontX score |
-| 3 | SoupX | Detect ambient RNA using SoupX with manual setting |
+| 3 | 20231013_SoupX_ambientRNAremoval_quads_manual.Rmd | Detect ambient RNA using SoupX with manual setting |
 | 4 | Quads_1_merge_int_cluster_annotate.Rmd | Merge, integrate, cluster, annotate |
 | 5 | Pseudobulk_DE_Quads_overall.Rmd | Pseudobulk (overall) |
 | 6 | Pseudobulk_DE_Quads_percelltype.Rmd | Pseudobulk (per cell type) |
