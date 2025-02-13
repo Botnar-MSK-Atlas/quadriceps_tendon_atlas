@@ -1,0 +1,635 @@
+---
+title: "20231013_SoupX_ambientfiltering_manual"
+author: "Jolet Mimpen"
+date: "2023-10-13"
+output: html_document
+---
+
+#Setup
+```{r, setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/")
+
+getwd()
+```
+
+
+#Load packages
+```{r}
+library(SoupX)
+library(celda)
+library(Seurat)
+library(SingleCellExperiment)
+library(stringr)
+library(dplyr)
+library(scuttle)
+library(ggplot2)
+
+```
+
+#Set up new folder
+```{r}
+working_directory <- getwd()
+working_directory
+
+date <- Sys.Date() %>% str_replace_all("-", "")
+
+dir.create(paste0(working_directory, "/", date, "_decontX_SoupX_scDblFinder/"))
+primary_directory <- paste0(working_directory, "/", date, "_decontX_SoupX_scDblFinder/")
+
+dir.create(paste0(primary_directory, "/", "RDS_objects/"))
+save_directory <- paste0(primary_directory, "/", "RDS_objects/")
+
+```
+
+
+#Select sample locations
+```{r}
+cells_file_list <- list.files("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20230926_14-55_QC-Filter.dir/RDS_objects.dir/filtered/", pattern="_SingleCellExp.rds")
+
+droplets_file_list <- list.files("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20230926_14-55_QC-Filter.dir/RDS_objects.dir/raw/", pattern="_SingleCellExp.rds")
+
+
+```
+
+#Choose files to open
+```{r}
+
+file_number <- 1
+
+cells_sce <- readRDS(paste0("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20230926_14-55_QC-Filter.dir/RDS_objects.dir/filtered/", cells_file_list[file_number]))
+
+droplets_sce <- readRDS(paste0("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/20230926_14-55_QC-Filter.dir/RDS_objects.dir/raw/", droplets_file_list[file_number]))
+
+cells_sce@colData$sample[1]
+droplets_sce@colData$sample[1]
+
+current_sample <- cells_sce@colData$sample[1]
+
+dir.create(paste0(primary_directory, current_sample, "/"))
+
+sub_directory <- paste0(primary_directory, current_sample, "/")
+sub_directory
+```
+
+#Get list of matched ensembl and gene names
+```{r}
+library(biomaRt)
+
+ensembl <- try(useMart("ensembl", dataset = "hsapiens_gene_ensembl"))
+if(class(ensembl) == "try-error"){
+  httr::set_config(httr::config(ssl_verifypeer = FALSE))
+  ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+}
+
+# get a df of ensemble_id vs gene symbol
+mapping <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"), mart = ensembl)
+```
+
+
+#Add gene names to droplets object using BioMart
+```{r, echo=FALSE, message = FALSE}
+
+
+#make a df with ensemble_id and hgnc_symbol
+df <- data.frame("ensembl_gene_id" = rownames(droplets_sce)) %>% 
+        left_join(mapping)
+    
+    #add a column of unique names, remove the "_" from ensembl_ids
+    df$unique_name <- uniquifyFeatureNames(df$ensembl_gene_id, df$hgnc_symbol)
+    df$unique_name <- gsub("^_", "", df$unique_name)
+    df <- df %>% distinct(ensembl_gene_id, .keep_all = TRUE) #remove duplicated rows
+    
+    #add ensembl_IDs to row names
+    rownames(df) <- rownames(droplets_sce)
+    
+    #add to the meta.features in the RNA assay
+    rowData(droplets_sce) <- df
+    
+    # Update the assay rownames
+    rownames(droplets_sce) <- rowData(droplets_sce)$unique_name
+    
+    rownames(cells_sce) <- rowData(cells_sce)$unique_name
+
+
+```
+
+
+#OR Add gene name by copying across
+```{r}
+rownames(droplets_so) <- rownames(cells_so)
+```
+
+
+#Convert to Seurat
+```{r}
+    
+#Convert to Seurat object
+droplets_so <- CreateSeuratObject(counts = counts(droplets_sce),
+                                     assay = "RNA",
+                                     project = mainExpName(droplets_sce),
+                                     meta.data = as.data.frame(colData(droplets_sce)))
+```
+
+
+
+
+
+#Convert cells SCE into Seurat Object, normalise/scale/etc, plot
+```{r}
+cells_so <- CreateSeuratObject(counts = counts(cells_sce),
+                                     assay = "RNA",
+                                     project = mainExpName(cells_sce),
+                                     meta.data = as.data.frame(colData(cells_sce)))
+
+vlnplot1 <- VlnPlot(cells_so, features = c("nFeature_RNA", "nCount_RNA"), ncol = 2, log = T)
+vlnplot2 <- VlnPlot(cells_so, features = c("subsets_mito_percent"), ncol = 1)
+(vlnplot1 | vlnplot2)
+
+cells_so <- cells_so %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData() %>%
+           RunPCA()%>%
+           FindNeighbors(dims = 1:50) %>%
+           RunUMAP(dims = 1:50) %>%
+           FindClusters(resolution = 0.3)
+
+
+
+DimPlot(cells_so, reduction = "umap", label = T)
+
+```
+
+
+#Add Seurat cluster info into SCE
+```{r}
+
+# put the cluster info in the sce colData
+colData(cells_sce)$seurat_clusters <- cells_so[["seurat_clusters"]]
+# Add the PCA & UMAP dim reductions to the sce object
+reducedDim(cells_sce) <- Embeddings(cells_so, reduction = "pca")
+reducedDim(cells_sce, type = "umap") <- Embeddings(cells_so, reduction = "umap")
+    
+
+cells_sce <- celda::decontX(cells_sce, 
+                            background = droplets_sce, 
+                            z = pull(colData(cells_sce)$seurat_clusters))
+
+
+plotDecontXContamination(cells_sce)
+
+
+```
+
+
+
+#Convert cells SCE into Seurat Object, normalise/scale/etc, plot
+```{r}
+
+cells_so <- CreateSeuratObject(counts = counts(cells_sce),
+                                     assay = "RNA",
+                                     project = mainExpName(cells_sce),
+                                     meta.data = as.data.frame(colData(cells_sce)))
+
+cells_so[["decontXcounts"]] <- CreateAssayObject(counts = decontXcounts(cells_sce))
+
+DefaultAssay(cells_so) <- "RNA"
+
+cells_so <- cells_so %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData() %>%
+           RunPCA()%>%
+           FindNeighbors(dims = 1:50) %>%
+           RunUMAP(dims = 1:50) %>%
+           FindClusters(resolution = 0.3)
+
+
+vlnplot1 <- VlnPlot(cells_so, features = c("nFeature_RNA", "nCount_RNA"), ncol = 2, log = T)
+vlnplot2 <- VlnPlot(cells_so, features = c("subsets_mito_percent", "decontX_contamination"), ncol = 2)
+vlnplot1
+vlnplot2
+
+umapplot <- DimPlot(cells_so, reduction = "umap", label = T)
+umapplot
+
+decontXcontaminationplot <- FeaturePlot(cells_so, 
+                                features = "decontX_contamination",
+                                cols = c("grey89", "red"))
+
+decontXcontaminationplot
+
+rm(vlnplot1, vlnplot2)
+
+```
+
+
+#Save UMAPs
+```{r}
+
+ggsave(paste0(sub_directory, "/UMAP_RNA.png"), plot = umapplot, width = 8, height = 5, bg = "white")
+ggsave(paste0(sub_directory, "/UMAP_decontXcontamination.png"), plot = decontXcontaminationplot, width = 8, height = 5, bg = "white")
+
+rm(umapplot, decontXcontaminationplot)
+```
+
+
+
+#Extract counts matrices from cells and droplet Seurat object and reorder rownames to ensure that they are the same order
+```{r}
+
+library(Matrix)
+
+cell.matrix <- cells_so@assays$RNA@counts
+cell.matrix <- Matrix(cell.matrix, sparse = T)
+cell.matrix <- cell.matrix[order(row.names(cell.matrix)), ]
+
+
+droplet.matrix <- droplets_so@assays$RNA@counts
+droplet.matrix <- Matrix(droplet.matrix, sparse = T)
+droplet.matrix <- droplet.matrix[order(row.names(droplet.matrix)), ]
+
+identical(rownames(cell.matrix), rownames(droplet.matrix))
+
+```
+
+
+#Make Soup Channel
+```{r}
+soup.channel <- SoupChannel(droplet.matrix, cell.matrix)
+```
+
+
+#Add metadata and UMAP to Soup Channel
+```{r}
+
+cell.metadata <- cells_so[[]]
+cell.umap <- cells_so@reductions$umap@cell.embeddings
+
+soup.channel  <- setClusters(soup.channel, setNames(cell.metadata$seurat_clusters, rownames(cell.metadata)))
+soup.channel  <- setDR(soup.channel, cell.umap)
+```
+
+
+#Adipocyte markers
+```{r, fig.height=5, fig.width=10}
+adipocytemarkers <- c("ADIPOQ", "PLIN1", "PLIN4", "GPAM", "AQP7")
+
+DimPlot(cells_so, reduction = "umap", label = T)
+FeaturePlot(cells_so, features = adipocytemarkers, ncol = 3)
+DotPlot(cells_so, features = adipocytemarkers, cols = c("blue", "red"))
+VlnPlot(cells_so, features = adipocytemarkers)
+```
+
+#VEC markers
+```{r, fig.height=5, fig.width=10}
+VECmarkers <- c("VWF", "PTPRB", "FLT1")
+
+DimPlot(cells_so, reduction = "umap", label = T)
+FeaturePlot(cells_so, features = VECmarkers, ncol = 3)
+DotPlot(cells_so, features = VECmarkers, cols = c("blue", "red"))
+VlnPlot(cells_so, features = VECmarkers)
+```
+
+#Macrophage markers
+```{r, fig.height=5, fig.width=10}
+macrophagemarkers <- c("CD163", "CD163L1", "CD14", "CD68", "MRC1", "MSR1")
+
+DimPlot(cells_so, reduction = "umap", label = T)
+FeaturePlot(cells_so, features = macrophagemarkers, ncol = 3)
+DotPlot(cells_so, features = macrophagemarkers, cols = c("blue", "red"))
+VlnPlot(cells_so, features = macrophagemarkers)
+```
+
+#Fibroblast markers
+```{r, fig.height=5, fig.width=10}
+fibroblastmarkers <- c("COL1A1", "COL1A2", "COL3A1", "DCN")
+
+DimPlot(cells_so, reduction = "umap", label = T)
+FeaturePlot(cells_so, features = fibroblastmarkers, ncol = 4)
+DotPlot(cells_so, features = fibroblastmarkers, cols = c("blue", "red"))
+VlnPlot(cells_so, features = fibroblastmarkers, ncol = 4)
+
+FeaturePlot(cells_so, features = "NOTCH3") | DotPlot(cells_so, features = "NOTCH3", cols = c("blue", "red")) | VlnPlot(cells_so, features = "NOTCH3")
+```
+
+
+#Head the top 20 most highly expressed genes in the background
+```{r}
+head(soup.channel$soupProfile[order(soup.channel$soupProfile$est, decreasing = TRUE), ], n = 20)
+
+```
+
+
+#Estimate which cells should not express the list of markers. Play around with the maximum contamination number to get the right cells (which you can do based on expression of these markers on the feature plots above)
+##Lining layer markers
+```{r}
+markerlisttouse <- fibroblastmarkers
+markerlistname <- "fibroblastmarkers"
+
+useToEst = estimateNonExpressingCells(soup.channel, nonExpressedGeneList = list(markerlisttouse), maximumContamination = 8) 
+
+
+markermapplot <- plotMarkerMap(soup.channel, geneSet = markerlisttouse, useToEst = useToEst)
+markermapplot
+```
+
+
+#Calculate contamination fraction
+```{r}
+soup.channel <- calculateContaminationFraction(soup.channel, list(markerlisttouse), useToEst = useToEst, forceAccept = T)
+```
+
+
+
+#Export matrix of adjusted counts
+```{r}
+out <- adjustCounts(soup.channel)
+```
+
+
+#Check if counts were appropriately adjusted
+```{r}
+PRG4plot <- plotChangeMap(soup.channel, out, "PRG4") + ggtitle("PRG4")
+PRG4plot
+FN1plot <- plotChangeMap(soup.channel, out, "FN1") + ggtitle("FN1")
+FN1plot
+COL1A1plot <- plotChangeMap(soup.channel, out, "COL1A1") + ggtitle("COL1A1")
+COL1A1plot
+COL1A2plot <- plotChangeMap(soup.channel, out, "COL1A2") + ggtitle("COL1A2")
+COL1A2plot
+COL3A1plot <- plotChangeMap(soup.channel, out, "COL3A1") + ggtitle("COL3A1")
+COL3A1plot
+KAZNplot <- plotChangeMap(soup.channel, out, "KAZN") + ggtitle("KAZN")
+KAZNplot
+CLUplot <- plotChangeMap(soup.channel, out, "CLU") + ggtitle("CLU")
+CLUplot
+DCNplot <- plotChangeMap(soup.channel, out, "DCN") + ggtitle("DCN")
+DCNplot
+
+KITplot <- plotChangeMap(soup.channel, out, "KIT") + ggtitle("KIT")
+KITplot
+
+PLIN1plot <- plotChangeMap(soup.channel, out, "PLIN1") + ggtitle("PLIN1")
+PLIN1plot
+
+CD163plot <- plotChangeMap(soup.channel, out, "CD163") + ggtitle("CD163")
+CD163plot
+
+plotChangeMap(soup.channel, out, "APOE") + ggtitle("APOE")
+VWFplot <- plotChangeMap(soup.channel, out, "VWF") + ggtitle("VWF")
+VWFplot
+
+THEMISplot <- plotChangeMap(soup.channel, out, "THEMIS") + ggtitle("THEMIS")
+THEMISplot
+MS4A1plot <- plotChangeMap(soup.channel, out, "MS4A1") + ggtitle("MS4A1")
+MS4A1plot
+
+NOTCH3plot <- plotChangeMap(soup.channel, out, "NOTCH3") + ggtitle("NOTCH3")
+NOTCH3plot
+
+HLADRAplot <- plotChangeMap(soup.channel, out, "HLA-DRA") + ggtitle("HLA-DRA")
+HLADRAplot
+
+TTNplot <- plotChangeMap(soup.channel, out, "TTN") + ggtitle("TTN")
+TTNplot
+
+TRDNplot <- plotChangeMap(soup.channel, out, "TRDN") + ggtitle("TRDN")
+TRDNplot
+```
+
+```{r, fig.height=15, fig.width=20}
+plotchangemapgrid <- cowplot::plot_grid(PRG4plot, FN1plot, DCNplot, CLUplot, COL1A1plot, COL1A2plot, COL3A1plot, KAZNplot, CD163plot, THEMISplot, MS4A1plot, KITplot, VWFplot, NOTCH3plot, PLIN1plot, TTNplot, ncol = 4)
+
+plotchangemapgrid
+```
+
+
+#Save UMAPs
+```{r}
+
+ggsave(paste0(sub_directory, "/UMAP_plotMarkerMap_", markerlistname, ".png"), plot = markermapplot, width = 8, height = 5, bg = "white")
+ggsave(paste0(sub_directory, "/UMAP_plotchangemapgrid_", markerlistname, ".png"), plot = plotchangemapgrid, width = 15, height = 20, bg = "white")
+
+rm(PRG4plot, FN1plot, DCNplot, CLUplot, COL1A1plot, COL1A2plot, COL3A1plot, KAZNplot, HLADRAplot, CD163plot, THEMISplot, MS4A1plot, KITplot, VWFplot, NOTCH3plot, PLIN1plot, TTNplot)
+
+```
+
+
+#Add "out"-channel into your Seurat object
+```{r}
+
+new_so <- cells_so
+
+new_so[["SoupXcounts"]] <- CreateAssayObject(counts = out)
+
+DimPlot(new_so, reduction = "umap", label = T)
+
+#saveRDS(new_so, "/ceph/project/tendonhca/shared/chromium/analysis/20230302_synovium/202310_SoupX_adjusted/MSK0787-SYN-KNEE_filtered_SoupX_removed")
+
+
+```
+
+
+
+#Normalise and scale soupX counts so that they can be used for plotting
+```{r}
+DefaultAssay(object = new_so) <- "decontXcounts"
+
+new_so <- new_so %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData()
+
+DefaultAssay(object = new_so) <- "SoupXcounts"
+
+new_so <- new_so %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData()
+
+
+DimPlot(new_so, reduction = "umap", label = T)
+
+
+```
+
+#Make featureplots of list of genes with RNA and SoupXcounts matrices
+```{r, fig.height=15, fig.width=15}
+#genelist <- c("PRG4", "CLIC5", "CD55", "HBEGF", "FN1", "CRTAC1", "ITGB8", "CLU", "PLIN1", "COL1A1", "COL1A2", "COL3A1", "DCLK1", "IGHA1", "HLA-DRA", "APOE")
+
+genelist <- c("COL1A1", "COL1A2", "COL3A1", "DCLK1", "PRG4", "FN1", "TTN", "TRDN", "CD163", "PLIN1", "VWF", "THEMIS", "MS4A1", "NOTCH3")
+
+DefaultAssay(object = new_so) <- "RNA"
+plot1 <- FeaturePlot(new_so, features = genelist)
+
+
+DefaultAssay(object = new_so) <- "decontXcounts"
+plot2 <- FeaturePlot(new_so, features = genelist)
+
+
+DefaultAssay(object = new_so) <- "SoupXcounts"
+plot3 <- FeaturePlot(new_so, features = genelist)
+
+
+
+plot1
+plot2
+plot3
+
+```
+
+
+```{r, fig.height=15, fig.width=45}
+plot0 <- cowplot::plot_grid(plot1, plot2, plot3, ncol = 3)
+plot0
+```
+
+
+
+#Save Featureplots
+```{r}
+
+ggsave(paste0(sub_directory, "/Featureplots_RNA.png"), plot = plot1, width = 15, height = 15, bg = "white")
+ggsave(paste0(sub_directory, "/Featureplots_decontXcounts.png"), plot = plot2, width = 15, height = 15, bg = "white")
+ggsave(paste0(sub_directory, "/Featureplots_SoupXcounts.png"), plot = plot3, width = 15, height = 15, bg = "white")
+ggsave(paste0(sub_directory, "/Featureplots_combined.png"), plot = plot0, width = 45, height = 15, bg = "white")
+
+rm(plot1, plot2, plot3, plot0)
+```
+
+
+
+#Make dotplots of list of genes with RNA and SoupXcounts matrices
+```{r, fig.width=12, fig.height=5}
+
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN", "PRG4", "CDH11", "FN1", "POSTN", 
+              "PECAM1", "PTPRB", "FLT1", "VWF", "VEGFC",
+              "NOTCH3", "PDGFRB", "MYO1B", 
+              "MMRN1", "PROX1", "KDR", "FLT4", 
+              "GPAM", "AQP7", "ADIPOQ", 
+              "PTPRC", "CD247", 
+              "CD69", "KIT", "CDK15",
+              "MS4A1", "CD37", "BLNK", "SDC1", "IGHA1", 
+               "CD163", "MERTK", "MRC1",
+              "ASPM", "DIAPH3",
+              "IRF7", "CLEC4C", "IL3RA", "HLA-DQA1",
+              "TTN", "TRDN", "NEB", 
+              "PAX7")
+
+DefaultAssay(object = new_so) <- "RNA"
+plot4 <- DotPlot(new_so, features = geneName, cols = c("blue", "red"), assay = "RNA")
+
+DefaultAssay(object = new_so) <- "decontXcounts"
+plot5 <- DotPlot(new_so, features = geneName, cols = c("blue", "red"), assay = "decontXcounts")
+
+DefaultAssay(object = new_so) <- "SoupXcounts"
+plot6 <- DotPlot(new_so, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts")
+
+
+
+plot4 <- plot4 + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("RNA")
+plot5 <- plot5 + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("decontXcounts")
+plot6 <- plot6 + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ggtitle("SoupXcounts")
+
+plot4
+plot5
+plot6
+
+
+```
+
+
+#Dotplot grid to compare
+```{r, fig.width=12, fig.height=15}
+plot7 <- cowplot::plot_grid(plot4, plot5, plot6, ncol = 1)
+
+plot7
+```
+
+
+#Save dotplots
+```{r}
+
+ggsave(paste0(sub_directory, "/Dotplot_RNA.png"), plot = plot4, width = 12, height = 5, bg = "white")
+ggsave(paste0(sub_directory, "/Dotplot_decontXcounts.png"), plot = plot5, width = 12, height = 5, bg = "white")
+ggsave(paste0(sub_directory, "/Dotplot_SoupXcounts.png"), plot = plot6, width = 12, height = 5, bg = "white")
+ggsave(paste0(sub_directory, "/Dotplot_combined.png"), plot = plot7, width = 12, height = 15, bg = "white")
+
+rm(plot4, plot5, plot6, plot7)
+```
+
+
+#Run scDblFinder and add metadata to Seurat object
+```{r}
+library(scDblFinder)
+
+new_so_scdblmetrics <- scDblFinder(new_so@assays$SoupXcounts@counts, clusters = new_so@meta.data$seurat_clusters)
+
+
+new_so@meta.data$scDblFinder.class <- new_so_scdblmetrics@colData$scDblFinder.class
+new_so@meta.data$scDblFinder.score <- new_so_scdblmetrics@colData$scDblFinder.score
+
+```
+
+
+#Check new clustering
+```{r, fig.height=6, fig.width=10}
+DefaultAssay(object = new_so) <- "SoupXcounts"
+
+new_so <- new_so %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData() %>%
+           RunPCA()%>%
+           FindNeighbors(dims = 1:50) %>%
+           RunUMAP(dims = 1:50) %>%
+           FindClusters(resolution = 0.3)
+
+newumap <- DimPlot(new_so, reduction = "umap", label = T)
+newumap_scDbl <- DimPlot(new_so, reduction = "umap", label = T, group.by = "scDblFinder.class")
+newumap_decontX <- FeaturePlot(new_so, reduction = "umap", features = "decontX_contamination")
+plot5 <- DotPlot(new_so, features = geneName, cols = c("blue", "red"), assay = "SoupXcounts")
+newdotplot <- plot5 + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+newumap
+newumap_scDbl
+newumap_decontX
+newdotplot
+
+```
+
+
+#Save plots
+```{r}
+
+ggsave(paste0(sub_directory, "/SoupXclustered_UMAP.png"), plot = newumap, width = 8, height = 5, bg = "white")
+ggsave(paste0(sub_directory, "/SoupXclustered_UMAP_decontXcontamination.png"), plot = newumap_decontX, width = 8, height = 5, bg = "white")
+ggsave(paste0(sub_directory, "/SoupXclustered_UMAP_scDblFinder.png"), plot = newumap_scDbl, width = 8, height = 5, bg = "white")
+ggsave(paste0(sub_directory, "/SoupXclustered_UMAP_Dotplot.png"), plot = newdotplot, width = 12, height = 5, bg = "white")
+
+rm(newumap, newumap_decontX, newumap_scDbl, newdotplot)
+
+```
+
+
+#Save RDS
+```{r}
+
+saveRDS(new_so, paste0(save_directory, current_sample, "_", markerlistname, "_filtered_decontX_SoupX_scDblFinder.RDS"))
+
+```
+
+
+
+
+#Remove 
+```{r}
+rm(cell.matrix, cell.metadata, cell.umap, cells_sce, cells_so, df, droplet.matrix, droplets_sce, droplets_so, ensembl, mapping, new_so, new_so_scdblmetrics, out, soup.channel, useToEst)
+
+rm(adipocytemarkers, cells_file_list, current_sample, date, droplets_file_list, fibroblastmarkers, macrophagemarkers, markerlistname, markerlisttouse, VECmarkers, save_directory, sub_directory, working_directory, primary_directory)
+
+rm(decontXcontaminationplot, df, markermapplot, plot5, plotchangemapgrid, TRDNplot, umapplot)
+```
+
+
