@@ -2,10 +2,10 @@
 Jolet Y. Mimpen, Mathew J. Baldwin, Claudia Paul, Lorenzo Ramos-Mucci, Alina Kurjan, Carla J. Cohen, Shreeya Sharma, Marie S.N. Chevalier Florquin, Philippa A. Hulley, John McMaster, Andrew Titchener, Alexander Martin, Matthew L. Costa, Stephen E. Gwilym, Adam P. Cribbs,
 Sarah J.B. Snelling  
   
-https://doi.org/10.1101/2024.09.06.611599
+[The Journal of Physiology (2025)](https://doi.org/10.1113/JP287812)
 
-The full dataset can be explored on Cellxgene and downloaded from the HCA data portal  
-TO DO Add links once live  
+The full dataset can be explored on the [CZI CELLxGENE Explorer](https://cellxgene.cziscience.com/collections/579203e2-182f-47bc-8230-7aa47247e2a4) and downloaded from the HCA data portal  
+ 
 
 Code by [Jolet Mimpen](https://orcid.org/0000-0003-4464-242X) and [Carla Cohen](https://github.com/carlacohen)
 
